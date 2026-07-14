@@ -1,0 +1,228 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
+import { ArrowLeft, ImageIcon, Music } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Logo } from '@/components/logo'
+import { MembersPanel } from '@/components/members-panel'
+import { PreviewCanvas, type PreviewHandle } from '@/components/preview-canvas'
+import { TimelinePanel } from '@/components/timeline-panel'
+import { getAudioUrlCloud, uploadAudioCloud, upsertProjectCloud } from '@/lib/cloud-storage'
+import { compressImage } from '@/lib/image-utils'
+import type { Group, Member, Project, Segment } from '@/lib/types'
+
+interface EditorProps {
+  initialProject: Project
+  groups?: Group[]
+  userId: string
+  onBack: () => void
+}
+
+type Tab = 'info' | 'members' | 'timeline'
+
+export function Editor({ initialProject, groups = [], userId, onBack }: EditorProps) {
+  const [project, setProject] = useState<Project>(initialProject)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [uploadingAudio, setUploadingAudio] = useState(false)
+  const [tab, setTab] = useState<Tab>('info')
+  const previewRef = useRef<PreviewHandle>(null)
+  const coverInputRef = useRef<HTMLInputElement>(null)
+  const audioInputRef = useRef<HTMLInputElement>(null)
+
+  // Carrega o áudio do Supabase Storage (URL assinada) ao abrir
+  useEffect(() => {
+    if (!initialProject.hasAudio) return
+    let cancelled = false
+    void getAudioUrlCloud(userId, initialProject.id).then((url) => {
+      if (!cancelled && url) setAudioUrl(url)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [initialProject.id, initialProject.hasAudio, userId])
+
+  // Auto-save com debounce na nuvem
+  const isFirstRender = useRef(true)
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+      return
+    }
+    const timer = setTimeout(() => {
+      void upsertProjectCloud({ ...project, updatedAt: Date.now() }, userId).catch((e) =>
+        console.error('Falha ao salvar projeto na nuvem', e),
+      )
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [project, userId])
+
+  const patch = (p: Partial<Project>) => setProject((prev) => ({ ...prev, ...p }))
+
+  const handleCover = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const coverImage = await compressImage(file) // 150x150 jpeg 0.6
+      patch({ coverImage })
+    } catch (e) {
+      console.error('Falha ao comprimir capa', e)
+    }
+  }
+
+  const handleAudio = async (file: File | undefined) => {
+    if (!file) return
+    // Preview local imediato enquanto o upload acontece em segundo plano
+    if (audioUrl?.startsWith('blob:')) URL.revokeObjectURL(audioUrl)
+    setAudioUrl(URL.createObjectURL(file))
+    patch({ hasAudio: true, audioName: file.name })
+    setUploadingAudio(true)
+    try {
+      await uploadAudioCloud(userId, project.id, file)
+    } catch (e) {
+      console.error('Falha ao enviar áudio para a nuvem', e)
+    } finally {
+      setUploadingAudio(false)
+    }
+  }
+
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'info', label: 'Informações' },
+    { id: 'members', label: `Membros (${project.members.length})` },
+    { id: 'timeline', label: `Timeline (${project.segments.length})` },
+  ]
+
+  return (
+    <div className="flex h-dvh flex-col">
+      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <Button size="icon" variant="ghost" onClick={onBack} aria-label="Voltar ao dashboard">
+          <ArrowLeft className="size-4" />
+        </Button>
+        <Logo className="size-8 shrink-0" />
+        <div className="min-w-0">
+          <h1 className="truncate text-sm font-semibold">{project.title || 'Sem título'}</h1>
+          <p className="truncate text-xs text-muted-foreground">
+            {project.artist || 'Artista'} · salvo automaticamente
+          </p>
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 md:flex-row">
+        {/* Preview */}
+        <div className="flex min-h-0 min-w-0 flex-1 justify-center">
+          <PreviewCanvas ref={previewRef} project={project} audioUrl={audioUrl} />
+        </div>
+
+        {/* Painéis */}
+        <aside className="flex w-full flex-col gap-3 overflow-y-auto md:w-[360px] md:shrink-0">
+          <div className="flex gap-1 rounded-lg bg-secondary p-1" role="tablist">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={tab === t.id}
+                onClick={() => setTab(t.id)}
+                className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                  tab === t.id
+                    ? 'bg-background text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'info' && (
+            <div className="flex flex-col gap-3">
+              <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                Título da música
+                <input
+                  value={project.title}
+                  onChange={(e) => patch({ title: e.target.value })}
+                  className="h-9 rounded-md border border-input bg-transparent px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                Artista / Grupo
+                <input
+                  value={project.artist}
+                  onChange={(e) => patch({ artist: e.target.value })}
+                  className="h-9 rounded-md border border-input bg-transparent px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </label>
+
+              <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
+                {project.coverImage ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={project.coverImage}
+                    alt="Capa do projeto"
+                    className="size-14 rounded-md object-cover"
+                  />
+                ) : (
+                  <span className="flex size-14 items-center justify-center rounded-md bg-secondary">
+                    <ImageIcon className="size-5 text-muted-foreground" />
+                  </span>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">Capa</p>
+                  <p className="text-xs text-muted-foreground">Vira o fundo com blur do vídeo</p>
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => coverInputRef.current?.click()}>
+                  Enviar
+                </Button>
+                <input
+                  ref={coverInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => void handleCover(e.target.files?.[0])}
+                />
+              </div>
+
+              <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
+                <span className="flex size-14 items-center justify-center rounded-md bg-secondary">
+                  <Music className="size-5 text-muted-foreground" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">Áudio</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {uploadingAudio
+                      ? 'Enviando para a nuvem…'
+                      : (project.audioName ?? 'Nenhum arquivo')}
+                  </p>
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => audioInputRef.current?.click()}>
+                  Enviar
+                </Button>
+                <input
+                  ref={audioInputRef}
+                  type="file"
+                  accept="audio/*"
+                  className="hidden"
+                  onChange={(e) => void handleAudio(e.target.files?.[0])}
+                />
+              </div>
+            </div>
+          )}
+
+          {tab === 'members' && (
+            <MembersPanel
+              members={project.members}
+              groups={groups}
+              onChange={(members: Member[]) => patch({ members })}
+            />
+          )}
+
+          {tab === 'timeline' && (
+            <TimelinePanel
+              members={project.members}
+              segments={project.segments}
+              onChange={(segments: Segment[]) => patch({ segments })}
+              getTime={() => previewRef.current?.getTime() ?? 0}
+            />
+          )}
+        </aside>
+      </div>
+    </div>
+  )
+}
