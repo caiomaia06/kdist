@@ -10,8 +10,13 @@ export interface Segment {
   memberId: string
   startTime: number // segundos
   endTime: number // segundos
-  lyric?: string // letra cantada neste trecho
+  lyric?: string // legado: letra única (tratada como romanização)
+  lyricHangul?: string // letra original em Hangul
+  lyricRomanized?: string // romanização
+  lyricTranslation?: string // tradução
 }
+
+export type VideoFormat = 'vertical' | 'horizontal'
 
 export interface Group {
   id: string
@@ -31,6 +36,7 @@ export interface Project {
   hasAudio: boolean
   audioName?: string
   duration?: number // segundos
+  format?: VideoFormat // 'vertical' (TikTok 9:16, padrão) ou 'horizontal' (YouTube 16:9)
   createdAt: number
   updatedAt: number
 }

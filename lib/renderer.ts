@@ -1,7 +1,24 @@
-import type { Project } from './types'
+import { drawVisualizer } from './audio-visualizer'
+import {
+  computeLastEndTimes,
+  desaturateColor,
+  drawLeftChatToasts,
+  drawOffBadge,
+  grayscaleImage,
+  hasLeftChat,
+} from './left-chat'
+import type { Project, VideoFormat } from './types'
 
 export const VIDEO_W = 1080
 export const VIDEO_H = 1920
+
+/** Dimensões do vídeo conforme o formato do projeto. */
+export function videoDims(format?: VideoFormat): { W: number; H: number } {
+  return format === 'horizontal' ? { W: 1920, H: 1080 } : { W: 1080, H: 1920 }
+}
+
+/** Duração da tela de Ranking Final no fim do áudio (segundos). */
+export const FINAL_RANKING_SECS = 5
 
 export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
@@ -15,73 +32,99 @@ export interface MemberRenderState {
   initialized: boolean
 }
 
+// ---------- Layout do cabeçalho por formato ----------
+
+interface HeaderLayout {
+  coverSize: number
+  coverCy: number
+  labelY: number
+  titleY: number
+  artistY: number
+  headerEndY: number
+  titleFont: number
+}
+
+function headerLayout(project: Project): HeaderLayout {
+  const horizontal = project.format === 'horizontal'
+  const hasCover = !!project.coverImage
+  if (horizontal) {
+    return hasCover
+      ? { coverSize: 110, coverCy: 100, labelY: 192, titleY: 252, artistY: 302, headerEndY: 315, titleFont: 54 }
+      : { coverSize: 0, coverCy: 0, labelY: 84, titleY: 152, artistY: 206, headerEndY: 220, titleFont: 54 }
+  }
+  return hasCover
+    ? { coverSize: 140, coverCy: 190, labelY: 320, titleY: 400, artistY: 460, headerEndY: 470, titleFont: 68 }
+    : { coverSize: 0, coverCy: 0, labelY: 200, titleY: 280, artistY: 340, headerEndY: 350, titleFont: 68 }
+}
+
+function hasAnyLyric(project: Project): boolean {
+  return project.segments.some(
+    (s) => s.lyric?.trim() || s.lyricHangul?.trim() || s.lyricRomanized?.trim() || s.lyricTranslation?.trim(),
+  )
+}
+
+/** Y onde começa a zona das barras. */
+function barsTop(project: Project): number {
+  const lyrics = hasAnyLyric(project)
+  if (project.format === 'horizontal') {
+    return headerLayout(project).headerEndY + (lyrics ? 400 : 260)
+  }
+  return project.coverImage ? (lyrics ? 790 : 700) : (lyrics ? 670 : 580)
+}
+
 /**
- * Cache offscreen do fundo: capa com blur pesado + overlay escuro + textos
- * estáticos. Desenhado UMA única vez — o loop principal apenas faz
+ * Cache offscreen do fundo: capa com blur pesado + overlay escuro + capa
+ * nítida pequena. Desenhado UMA única vez — o loop principal apenas faz
  * ctx.drawImage(cache, 0, 0). Nunca use ctx.filter dentro do loop.
+ * (O título/artista NÃO ficam no cache: são animados por frame.)
  */
 export function buildBackgroundCache(
   project: Project,
   coverImg: HTMLImageElement | null,
 ): HTMLCanvasElement {
+  const { W, H } = videoDims(project.format)
   const canvas = document.createElement('canvas')
-  canvas.width = VIDEO_W
-  canvas.height = VIDEO_H
+  canvas.width = W
+  canvas.height = H
   const ctx = canvas.getContext('2d')!
 
   if (coverImg) {
     // Capa esticada em cover, com blur pesado (apenas aqui, fora do loop)
-    const scale = Math.max(VIDEO_W / coverImg.width, VIDEO_H / coverImg.height) * 1.2
+    const scale = Math.max(W / coverImg.width, H / coverImg.height) * 1.2
     const w = coverImg.width * scale
     const h = coverImg.height * scale
     ctx.filter = 'blur(60px)'
-    ctx.drawImage(coverImg, (VIDEO_W - w) / 2, (VIDEO_H - h) / 2, w, h)
+    ctx.drawImage(coverImg, (W - w) / 2, (H - h) / 2, w, h)
     ctx.filter = 'none'
   } else {
-    const grad = ctx.createLinearGradient(0, 0, 0, VIDEO_H)
+    const grad = ctx.createLinearGradient(0, 0, 0, H)
     grad.addColorStop(0, '#16121f')
     grad.addColorStop(1, '#0a0810')
     ctx.fillStyle = grad
-    ctx.fillRect(0, 0, VIDEO_W, VIDEO_H)
+    ctx.fillRect(0, 0, W, H)
   }
 
   // Overlay escuro para contraste
   ctx.fillStyle = 'rgba(6, 5, 12, 0.72)'
-  ctx.fillRect(0, 0, VIDEO_W, VIDEO_H)
+  ctx.fillRect(0, 0, W, H)
 
   // Capa nítida pequena no topo (se existir)
   if (coverImg) {
-    const size = 140
-    const cx = VIDEO_W / 2
-    const cy = 190
+    const { coverSize, coverCy } = headerLayout(project)
+    const cx = W / 2
     ctx.save()
     ctx.beginPath()
-    ctx.roundRect(cx - size / 2, cy - size / 2, size, size, 24)
+    ctx.roundRect(cx - coverSize / 2, coverCy - coverSize / 2, coverSize, coverSize, 24)
     ctx.clip()
-    ctx.drawImage(coverImg, cx - size / 2, cy - size / 2, size, size)
+    ctx.drawImage(coverImg, cx - coverSize / 2, coverCy - coverSize / 2, coverSize, coverSize)
     ctx.restore()
     ctx.strokeStyle = 'rgba(255,255,255,0.25)'
     ctx.lineWidth = 3
     ctx.beginPath()
-    ctx.roundRect(cx - size / 2, cy - size / 2, size, size, 24)
+    ctx.roundRect(cx - coverSize / 2, coverCy - coverSize / 2, coverSize, coverSize, 24)
     ctx.stroke()
   }
 
-  // Textos estáticos
-  ctx.textAlign = 'center'
-  ctx.fillStyle = 'rgba(255,255,255,0.55)'
-  ctx.font = '600 30px Outfit, sans-serif'
-  ctx.fillText('LINE DISTRIBUTION', VIDEO_W / 2, coverImg ? 320 : 200)
-
-  ctx.fillStyle = '#ffffff'
-  ctx.font = '800 68px Outfit, sans-serif'
-  ctx.fillText(project.title || 'Sem título', VIDEO_W / 2, coverImg ? 400 : 280, VIDEO_W - 120)
-
-  ctx.fillStyle = 'rgba(255,255,255,0.65)'
-  ctx.font = '500 42px Outfit, sans-serif'
-  ctx.fillText(project.artist || '', VIDEO_W / 2, coverImg ? 460 : 340, VIDEO_W - 160)
-
-  ctx.textAlign = 'left'
   return canvas
 }
 
@@ -113,10 +156,52 @@ function isActive(project: Project, memberId: string, t: number): boolean {
   )
 }
 
+function easeOutCubic(x: number): number {
+  return 1 - Math.pow(1 - x, 3)
+}
+
+/**
+ * Título/artista com animação de entrada (slide-up + fade nos primeiros
+ * instantes) e tipografia display (Unbounded) estilo K-pop edit.
+ */
+function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: number, W: number): void {
+  const hl = headerLayout(project)
+  const p = easeOutCubic(Math.min(1, t / 1.1)) // 0→1 em 1.1s
+  const rise = (1 - p) * 46
+
+  ctx.save()
+  ctx.textAlign = 'center'
+
+  // Rótulo com tracking largo
+  ctx.globalAlpha = Math.min(1, p * 1.2) * 0.55
+  ctx.fillStyle = '#ffffff'
+  ctx.font = '600 26px Unbounded, Outfit, sans-serif'
+  ctx.fillText('L I N E   D I S T R I B U T I O N', W / 2, hl.labelY + rise * 0.5)
+
+  // Título em fonte display com glow rosa sutil
+  ctx.globalAlpha = p
+  ctx.shadowColor = 'rgba(236, 72, 153, 0.55)'
+  ctx.shadowBlur = 30 * p
+  ctx.fillStyle = '#ffffff'
+  ctx.font = `800 ${hl.titleFont}px Unbounded, Outfit, sans-serif`
+  ctx.fillText(project.title || 'Sem título', W / 2, hl.titleY + rise, W - 120)
+  ctx.shadowBlur = 0
+
+  // Artista
+  ctx.globalAlpha = p * 0.7
+  ctx.font = '500 38px Outfit, sans-serif'
+  ctx.fillText(project.artist || '', W / 2, hl.artistY + rise, W - 160)
+
+  ctx.restore()
+  ctx.textAlign = 'left'
+}
+
 /**
  * Desenha um frame no instante t. Toda a matemática é absoluta:
  * as barras NUNCA encolhem — o máximo (maxBarW) representa o tempo total
  * de quem canta MAIS na música inteira.
+ * Se `duration` for informado, os últimos FINAL_RANKING_SECS mostram a
+ * tela de Ranking Final.
  */
 export function drawFrame(
   ctx: CanvasRenderingContext2D,
@@ -126,15 +211,32 @@ export function drawFrame(
   states: Map<string, MemberRenderState>,
   totals: Map<string, number>,
   t: number,
+  duration?: number,
+  freq?: Uint8Array,
 ): void {
+  const { W, H } = videoDims(project.format)
+
   // Limpa o quadro com o cache offscreen (uma única drawImage)
   ctx.drawImage(cache, 0, 0)
 
   const members = project.members
   const n = members.length
+
+  // --- Tela de Ranking Final nos últimos segundos ---
+  const rankingStart = duration && duration > FINAL_RANKING_SECS + 3 ? duration - FINAL_RANKING_SECS : Infinity
+  if (n > 0 && t >= rankingStart) {
+    drawFinalRanking(ctx, project, avatars, totals, t - rankingStart, W, H)
+    return
+  }
+
+  // --- Visualizador de espectro (camada de fundo, atrás das barras) ---
+  if (freq) drawVisualizer(ctx, project, freq, t, W, H)
+
+  drawHeaderText(ctx, project, t, W)
   if (n === 0) return
 
   const sung = computeSungTimes(project, t)
+  const lastEnd = computeLastEndTimes(project) // memoizado: não pesa o loop
 
   // Matemática absoluta: máximo = tempo total do 1º lugar na música toda
   let absoluteMax = 1
@@ -149,20 +251,21 @@ export function drawFrame(
   const rank = new Map<string, number>()
   order.forEach((m, i) => rank.set(m.id, i))
 
-  // Layout vertical (zona reservada acima das barras para a Bolha de Voz;
-  // se o projeto tem letras, a zona cresce para acomodar as lyrics)
-  const hasLyrics = project.segments.some((s) => s.lyric?.trim())
-  const topY = project.coverImage ? (hasLyrics ? 790 : 700) : (hasLyrics ? 670 : 580)
-  const bottomY = VIDEO_H - 120
+  // Layout vertical (zona reservada acima das barras para bolha + letras)
+  const horizontal = project.format === 'horizontal'
+  const topY = barsTop(project)
+  const bottomY = H - (horizontal ? 50 : 120)
   const availH = bottomY - topY
-  const rowH = Math.min(190, availH / n)
+  const rowH = Math.min(horizontal ? 140 : 190, availH / n)
   const startY = topY + (availH - rowH * n) / 2
 
-  const r = Math.max(38, Math.min(62, rowH * 0.32)) // raio do avatar
+  const r = Math.max(horizontal ? 22 : 38, Math.min(62, rowH * 0.32)) // raio do avatar
   const avatarCx = 90 + r
   const barX = avatarCx + r + 28
-  const barH = Math.max(26, Math.min(40, rowH * 0.24))
-  const maxBarW = VIDEO_W - barX - 200
+  const barH = Math.max(horizontal ? 18 : 26, Math.min(40, rowH * 0.24))
+  const maxBarW = W - barX - 200
+  const nameFont = horizontal ? 28 : 34
+  const timeFont = horizontal ? 26 : 30
 
   for (const m of members) {
     let st = states.get(m.id)
@@ -183,54 +286,44 @@ export function drawFrame(
 
     const cy = st.y
     const glow = st.glow
-    const alpha = 0.35 + 0.65 * glow
+    // "Saiu do chat": última linha já cantada → escurece para 40%
+    const left = hasLeftChat(lastEnd, m.id, t)
+    const alpha = left ? 0.4 : 0.35 + 0.65 * glow
+    const ringColor = left ? desaturateColor(m.color) : m.color
 
     ctx.globalAlpha = alpha
 
     // --- Círculo colorido atrás do avatar (recebe o neon) ---
-    if (glow > 0.02) {
+    if (!left && glow > 0.02) {
       ctx.shadowColor = m.color
       ctx.shadowBlur = 24 * glow
     }
-    ctx.fillStyle = m.color
+    ctx.fillStyle = ringColor
     ctx.beginPath()
     ctx.arc(avatarCx, cy, r + 5, 0, Math.PI * 2)
     ctx.fill()
     ctx.shadowBlur = 0 // reset imediato para não vazar o brilho
 
-    // --- Avatar (clip circular) ---
-    const img = avatars.get(m.id)
-    ctx.save()
-    ctx.beginPath()
-    ctx.arc(avatarCx, cy, r, 0, Math.PI * 2)
-    ctx.clip()
-    if (img) {
-      ctx.drawImage(img, avatarCx - r, cy - r, r * 2, r * 2)
+    // --- Avatar (clip circular; P&B pré-renderizado se saiu do chat) ---
+    const avatarImg = avatars.get(m.id)
+    if (left && avatarImg) {
+      drawAvatarSource(ctx, grayscaleImage(avatarImg), avatarCx, cy, r)
     } else {
-      ctx.fillStyle = '#1d1928'
-      ctx.fillRect(avatarCx - r, cy - r, r * 2, r * 2)
-      ctx.fillStyle = '#ffffff'
-      ctx.font = `700 ${Math.round(r * 0.9)}px Outfit, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText((m.name[0] || '?').toUpperCase(), avatarCx, cy + 2)
-      ctx.textAlign = 'left'
-      ctx.textBaseline = 'alphabetic'
+      drawAvatar(ctx, avatarImg, m.name, avatarCx, cy, r)
     }
-    ctx.restore()
 
     // --- Nome ---
     ctx.fillStyle = '#ffffff'
-    ctx.font = '600 34px Outfit, sans-serif'
+    ctx.font = `600 ${nameFont}px Outfit, sans-serif`
     ctx.fillText(m.name, barX + 4, cy - barH / 2 - 12, maxBarW)
 
     // --- Barra pílula (recebe o neon) ---
     const w = Math.max(barH, st.barW + barH) // largura mínima = pílula redonda
-    if (glow > 0.02) {
+    if (!left && glow > 0.02) {
       ctx.shadowColor = m.color
       ctx.shadowBlur = 24 * glow
     }
-    ctx.fillStyle = m.color
+    ctx.fillStyle = ringColor
     ctx.beginPath()
     ctx.roundRect(barX, cy - barH / 2 + 8, w, barH, barH / 2)
     ctx.fill()
@@ -238,13 +331,82 @@ export function drawFrame(
 
     // --- Tempo cantado ---
     ctx.fillStyle = 'rgba(255,255,255,0.9)'
-    ctx.font = '600 30px Outfit, sans-serif'
+    ctx.font = `600 ${timeFont}px Outfit, sans-serif`
     ctx.fillText(`${(sung.get(m.id) ?? 0).toFixed(1)}s`, barX + w + 18, cy + barH / 2)
+
+    // --- Ícone de status: porta no canto do avatar (fica até o fim) ---
+    if (left) {
+      ctx.globalAlpha = Math.min(1, alpha * 2.2) // badge mais visível que o resto
+      drawOffBadge(ctx, avatarCx, cy, r)
+    }
 
     ctx.globalAlpha = 1
   }
 
-  drawVoiceBubble(ctx, project, avatars, states, topY, t)
+  drawVoiceBubble(ctx, project, avatars, states, topY, t, W)
+  drawLeftChatToasts(ctx, project, lastEnd, avatars, t, W)
+}
+
+function drawAvatar(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | undefined,
+  name: string,
+  cx: number,
+  cy: number,
+  r: number,
+): void {
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.clip()
+  if (img) {
+    ctx.drawImage(img, cx - r, cy - r, r * 2, r * 2)
+  } else {
+    ctx.fillStyle = '#1d1928'
+    ctx.fillRect(cx - r, cy - r, r * 2, r * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.font = `700 ${Math.round(r * 0.9)}px Outfit, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText((name[0] || '?').toUpperCase(), cx, cy + 2)
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'alphabetic'
+  }
+  ctx.restore()
+}
+
+/** Variante que aceita qualquer fonte de imagem (ex: canvas P&B em cache). */
+function drawAvatarSource(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  cx: number,
+  cy: number,
+  r: number,
+): void {
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.clip()
+  ctx.drawImage(source, cx - r, cy - r, r * 2, r * 2)
+  ctx.restore()
+}
+
+/** Letras ativas no instante t, nas três camadas. */
+function activeLyricLayers(project: Project, t: number): {
+  hangul: string
+  romanized: string
+  translation: string
+} {
+  const active = project.segments.filter(
+    (s) => t >= s.startTime && t <= s.endTime,
+  )
+  const uniq = (vals: (string | undefined)[]) => [...new Set(vals.map((v) => v?.trim()).filter(Boolean))] as string[]
+  return {
+    hangul: uniq(active.map((s) => s.lyricHangul)).join(' / '),
+    // Legado: `lyric` antigo é tratado como romanização
+    romanized: uniq(active.map((s) => s.lyricRomanized || s.lyric)).join(' / '),
+    translation: uniq(active.map((s) => s.lyricTranslation)).join(' / '),
+  }
 }
 
 /**
@@ -260,6 +422,7 @@ function drawVoiceBubble(
   states: Map<string, MemberRenderState>,
   barsTopY: number,
   t: number,
+  W: number,
 ): void {
   const singers = project.members.filter((m) => (states.get(m.id)?.glow ?? 0) > 0.05)
   if (singers.length === 0) return
@@ -268,20 +431,12 @@ function drawVoiceBubble(
   const a = Math.min(1, Math.max(...singers.map((m) => states.get(m.id)!.glow)))
   const scale = 0.86 + 0.14 * a
 
-  // Letra ativa neste instante (única, mesmo em duetos onde cada segmento
-  // repete o texto)
-  const activeLyrics = [
-    ...new Set(
-      project.segments
-        .filter((s) => t >= s.startTime && t <= s.endTime && s.lyric?.trim())
-        .map((s) => s.lyric!.trim()),
-    ),
-  ]
-  const lyric = activeLyrics.join(' / ')
+  const layers = activeLyricLayers(project, t)
+  const hasLyric = !!(layers.hangul || layers.romanized || layers.translation)
 
-  const headerEndY = project.coverImage ? 470 : 350
+  const headerEndY = headerLayout(project).headerEndY
   // Com letra, a bolha sobe para abrir espaço para o texto abaixo dela
-  const bubbleCy = lyric ? headerEndY + 92 : (headerEndY + barsTopY) / 2 + 10
+  const bubbleCy = hasLyric ? headerEndY + 92 : (headerEndY + barsTopY) / 2 + 10
 
   // Geometria: avatares sobrepostos + nomes
   const r = 52
@@ -303,7 +458,7 @@ function drawVoiceBubble(
 
   ctx.save()
   ctx.globalAlpha = a
-  ctx.translate(VIDEO_W / 2, bubbleCy)
+  ctx.translate(W / 2, bubbleCy)
   ctx.scale(scale, scale)
   const x0 = -cardW / 2
 
@@ -344,23 +499,7 @@ function drawVoiceBubble(
     ctx.fill()
     ctx.shadowBlur = 0
 
-    const img = avatars.get(m.id)
-    ctx.save()
-    ctx.beginPath()
-    ctx.arc(cx, 0, r, 0, Math.PI * 2)
-    ctx.clip()
-    if (img) {
-      ctx.drawImage(img, cx - r, -r, r * 2, r * 2)
-    } else {
-      ctx.fillStyle = '#1d1928'
-      ctx.fillRect(cx - r, -r, r * 2, r * 2)
-      ctx.fillStyle = '#ffffff'
-      ctx.font = `700 ${Math.round(r * 0.9)}px Outfit, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText((m.name[0] || '?').toUpperCase(), cx, 2)
-    }
-    ctx.restore()
+    drawAvatar(ctx, avatars.get(m.id), m.name, cx, 0, r)
   }
 
   // --- Nomes ---
@@ -376,36 +515,89 @@ function drawVoiceBubble(
   ctx.textBaseline = 'alphabetic'
   ctx.restore()
 
-  // --- Letra sincronizada (estilo K-pop edit) ---
-  if (lyric) {
-    drawLyric(ctx, lyric, mainColor, bubbleCy + cardH / 2 + 26, barsTopY, a)
+  // --- Letras sincronizadas em camadas (estilo K-pop edit) ---
+  if (hasLyric) {
+    drawLyricLayers(ctx, layers, mainColor, bubbleCy + cardH / 2 + 26, barsTopY, a, W)
   }
 }
 
+interface LyricLayers {
+  hangul: string
+  romanized: string
+  translation: string
+}
+
 /**
- * Letra do trecho atual: texto grande e grosso, com contorno escuro +
- * sombra para legibilidade sobre qualquer fundo, e glow na cor do membro.
- * Quebra em até 2 linhas centralizadas; o fade acompanha a bolha.
+ * Letras em até 3 camadas: Hangul (grande), romanização (média) e tradução
+ * (menor, itálica). Cada linha tem contorno escuro + glow na cor do membro.
  */
-function drawLyric(
+function drawLyricLayers(
   ctx: CanvasRenderingContext2D,
-  lyric: string,
+  layers: LyricLayers,
   color: string,
   topY: number,
   maxY: number,
   alpha: number,
+  W: number,
 ): void {
-  const maxW = VIDEO_W - 160
-  const fontSize = 46
-  const lineH = 58
+  const maxW = W - 160
+  // [texto, fonte, altura de linha, alpha]
+  const rows: Array<[string, string, number, number]> = []
+  if (layers.hangul)
+    rows.push([layers.hangul, `800 48px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`, 60, 1])
+  if (layers.romanized) rows.push([layers.romanized, '800 42px Outfit, sans-serif', 54, 1])
+  if (layers.translation) rows.push([layers.translation, 'italic 500 30px Outfit, sans-serif', 42, 0.75])
+  if (rows.length === 0) return
+
   ctx.save()
-  ctx.globalAlpha = alpha
-  ctx.font = `800 ${fontSize}px Outfit, sans-serif`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
 
-  // Quebra por palavras em no máximo 2 linhas
-  const words = lyric.split(/\s+/)
+  // Calcula altura total (com quebra em até 2 linhas por camada)
+  const wrapped: Array<{ lines: string[]; font: string; lineH: number; a: number }> = []
+  let totalH = 0
+  for (const [text, font, lineH, a] of rows) {
+    ctx.font = font
+    const lines = wrapText(ctx, text, maxW, 2)
+    wrapped.push({ lines, font, lineH, a })
+    totalH += lines.length * lineH
+  }
+
+  let y = topY + 30
+  // Garante que o bloco não invade as barras
+  if (y + totalH > maxY - 8) y = Math.max(topY - 20, maxY - 8 - totalH)
+
+  for (const row of wrapped) {
+    ctx.font = row.font
+    for (const line of row.lines) {
+      const cy = y + row.lineH / 2
+      ctx.globalAlpha = alpha * row.a
+      // Glow na cor do membro
+      ctx.shadowColor = color
+      ctx.shadowBlur = 26 * alpha
+      // Contorno escuro para legibilidade
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
+      ctx.lineWidth = 8
+      ctx.lineJoin = 'round'
+      ctx.strokeText(line, W / 2, cy, maxW)
+      ctx.shadowBlur = 0
+      ctx.fillStyle = '#ffffff'
+      ctx.fillText(line, W / 2, cy, maxW)
+      y += row.lineH
+    }
+  }
+
+  ctx.restore()
+}
+
+/** Quebra texto por palavras em até maxLines linhas. */
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxW: number,
+  maxLines: number,
+): string[] {
+  const words = text.split(/\s+/)
   const lines: string[] = []
   let current = ''
   for (const w of words) {
@@ -415,35 +607,139 @@ function drawLyric(
     } else {
       lines.push(current)
       current = w
-      if (lines.length === 2) break
+      if (lines.length === maxLines) break
     }
   }
-  if (current && lines.length < 2) lines.push(current)
-  // Se sobrou texto (letra muito longa), sinaliza com reticências
-  if (lines.length === 2 && ctx.measureText(lines[1]).width > maxW) {
-    lines[1] = lines[1].slice(0, -1)
-  }
+  if (current && lines.length < maxLines) lines.push(current)
+  return lines
+}
 
-  const blockH = lines.length * lineH
-  let y = topY + lineH / 2
-  // Garante que o bloco não invade as barras
-  if (topY + blockH > maxY - 8) y = maxY - 8 - blockH + lineH / 2
+const MEDAL_COLORS = ['#FFD700', '#C0C0C0', '#CD7F32']
 
-  for (const line of lines) {
-    // Glow na cor do membro
-    ctx.shadowColor = color
-    ctx.shadowBlur = 26 * alpha
-    // Contorno escuro para legibilidade
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
-    ctx.lineWidth = 8
-    ctx.lineJoin = 'round'
-    ctx.strokeText(line, VIDEO_W / 2, y, maxW)
+/**
+ * Tela de Ranking Final: nos últimos segundos, o placar definitivo entra
+ * com fade + linhas em cascata, medalhas para o top 3 e porcentagens.
+ */
+function drawFinalRanking(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  avatars: Map<string, HTMLImageElement>,
+  totals: Map<string, number>,
+  elapsed: number, // segundos desde o início da tela final
+  W: number,
+  H: number,
+): void {
+  const fade = easeOutCubic(Math.min(1, elapsed / 0.8))
+
+  // Overlay escuro por cima do fundo
+  ctx.fillStyle = `rgba(6, 5, 12, ${0.82 * fade})`
+  ctx.fillRect(0, 0, W, H)
+
+  const sorted = [...project.members].sort(
+    (a, b) => (totals.get(b.id) ?? 0) - (totals.get(a.id) ?? 0),
+  )
+  const totalAll = sorted.reduce((acc, m) => acc + (totals.get(m.id) ?? 0), 0) || 1
+
+  ctx.save()
+  ctx.textAlign = 'center'
+
+  // Título da tela
+  ctx.globalAlpha = fade
+  ctx.shadowColor = 'rgba(236, 72, 153, 0.6)'
+  ctx.shadowBlur = 28 * fade
+  ctx.fillStyle = '#ffffff'
+  const titleFont = project.format === 'horizontal' ? 56 : 64
+  ctx.font = `800 ${titleFont}px Unbounded, Outfit, sans-serif`
+  const titleY = project.format === 'horizontal' ? 110 : 260
+  ctx.fillText('RESULTADO FINAL', W / 2, titleY, W - 120)
+  ctx.shadowBlur = 0
+  ctx.globalAlpha = fade * 0.55
+  ctx.font = '600 30px Outfit, sans-serif'
+  ctx.fillText(project.title || '', W / 2, titleY + 56, W - 160)
+
+  // Linhas do placar em cascata
+  const n = sorted.length
+  const listTop = titleY + 120
+  const listBottom = H - (project.format === 'horizontal' ? 60 : 160)
+  const rowH = Math.min(project.format === 'horizontal' ? 130 : 170, (listBottom - listTop) / Math.max(n, 1))
+  const r = Math.max(24, Math.min(56, rowH * 0.34))
+  const rowW = Math.min(W - 160, project.format === 'horizontal' ? 1100 : 920)
+  const x0 = (W - rowW) / 2
+
+  ctx.textAlign = 'left'
+  for (let i = 0; i < n; i++) {
+    const m = sorted[i]
+    // Cascata: cada linha entra 0.18s depois da anterior
+    const rowP = easeOutCubic(Math.max(0, Math.min(1, (elapsed - 0.35 - i * 0.18) / 0.5)))
+    if (rowP <= 0) continue
+    const cy = listTop + i * rowH + rowH / 2
+    const slide = (1 - rowP) * 60
+
+    ctx.globalAlpha = fade * rowP
+
+    // Fundo da linha (glass sutil; top 3 com contorno da medalha)
+    const isTop3 = i < 3
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'
+    ctx.beginPath()
+    ctx.roundRect(x0 + slide, cy - rowH / 2 + 8, rowW, rowH - 16, (rowH - 16) / 2)
+    ctx.fill()
+    if (isTop3) {
+      ctx.strokeStyle = MEDAL_COLORS[i]
+      ctx.globalAlpha = fade * rowP * 0.7
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.roundRect(x0 + slide, cy - rowH / 2 + 8, rowW, rowH - 16, (rowH - 16) / 2)
+      ctx.stroke()
+      ctx.globalAlpha = fade * rowP
+    }
+
+    // Medalha / posição
+    const medalCx = x0 + slide + 24 + 28
+    ctx.fillStyle = isTop3 ? MEDAL_COLORS[i] : 'rgba(255,255,255,0.18)'
+    if (isTop3) {
+      ctx.shadowColor = MEDAL_COLORS[i]
+      ctx.shadowBlur = 16 * rowP
+    }
+    ctx.beginPath()
+    ctx.arc(medalCx, cy, 28, 0, Math.PI * 2)
+    ctx.fill()
     ctx.shadowBlur = 0
-    // Preenchimento branco por cima
+    ctx.fillStyle = isTop3 ? '#1a1408' : '#ffffff'
+    ctx.font = '800 30px Outfit, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(String(i + 1), medalCx, cy + 1)
+    ctx.textAlign = 'left'
+
+    // Avatar com anel colorido
+    const avCx = medalCx + 28 + 22 + r
+    ctx.fillStyle = m.color
+    ctx.beginPath()
+    ctx.arc(avCx, cy, r + 4, 0, Math.PI * 2)
+    ctx.fill()
+    drawAvatar(ctx, avatars.get(m.id), m.name, avCx, cy, r)
+
+    // Nome + estatísticas
+    const textX = avCx + r + 24
+    const secs = totals.get(m.id) ?? 0
+    const pct = (secs / totalAll) * 100
     ctx.fillStyle = '#ffffff'
-    ctx.fillText(line, VIDEO_W / 2, y, maxW)
-    y += lineH
+    ctx.font = '700 36px Outfit, sans-serif'
+    ctx.fillText(m.name, textX, cy - 14, rowW - (textX - x0) - 200)
+    ctx.fillStyle = 'rgba(255,255,255,0.6)'
+    ctx.font = '500 27px Outfit, sans-serif'
+    ctx.fillText(`${secs.toFixed(1)}s cantados`, textX, cy + 26)
+
+    // Porcentagem à direita
+    ctx.textAlign = 'right'
+    ctx.fillStyle = m.color
+    ctx.font = '800 44px Outfit, sans-serif'
+    ctx.fillText(`${pct.toFixed(1)}%`, x0 + slide + rowW - 34, cy + 6)
+    ctx.textAlign = 'left'
+
+    ctx.textBaseline = 'alphabetic'
   }
 
   ctx.restore()
+  ctx.globalAlpha = 1
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ImageIcon, Music } from 'lucide-react'
+import { ArrowLeft, ImageIcon, Music, RectangleHorizontal, RectangleVertical } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Logo } from '@/components/logo'
 import { MembersPanel } from '@/components/members-panel'
@@ -133,6 +133,40 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
 
           {tab === 'info' && (
             <div className="flex flex-col gap-3">
+              <fieldset className="flex flex-col gap-1.5">
+                <legend className="text-xs font-medium text-muted-foreground">
+                  Formato do vídeo
+                </legend>
+                <div className="flex gap-1.5" role="group" aria-label="Formato do vídeo">
+                  <button
+                    type="button"
+                    onClick={() => patch({ format: 'vertical' })}
+                    aria-pressed={(project.format ?? 'vertical') === 'vertical'}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                      (project.format ?? 'vertical') === 'vertical'
+                        ? 'border-primary bg-primary/15 text-primary'
+                        : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <RectangleVertical className="size-4" />
+                    9:16 · TikTok / Shorts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => patch({ format: 'horizontal' })}
+                    aria-pressed={project.format === 'horizontal'}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                      project.format === 'horizontal'
+                        ? 'border-primary bg-primary/15 text-primary'
+                        : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <RectangleHorizontal className="size-4" />
+                    16:9 · YouTube
+                  </button>
+                </div>
+              </fieldset>
+
               <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
                 Título da música
                 <input

@@ -1,10 +1,10 @@
+import { attachAnalyser, readFrequency } from './audio-visualizer'
 import { loadImage } from './image-utils'
 import {
   buildBackgroundCache,
   drawFrame,
   computeTotals,
-  VIDEO_H,
-  VIDEO_W,
+  videoDims,
   type MemberRenderState,
 } from './renderer'
 import type { Project } from './types'
@@ -141,8 +141,9 @@ export function startVideoExport(
 
     // ---------- 2. Canvas offscreen + cache de fundo ----------
     const canvas = document.createElement('canvas')
-    canvas.width = VIDEO_W
-    canvas.height = VIDEO_H
+    const dims = videoDims(project.format)
+    canvas.width = dims.W
+    canvas.height = dims.H
     const ctx = canvas.getContext('2d')!
     const cache = buildBackgroundCache(project, cover)
     const totals = computeTotals(project)
@@ -152,7 +153,10 @@ export function startVideoExport(
     const dest = actx.createMediaStreamDestination()
     const source = actx.createBufferSource()
     source.buffer = audioBuffer
-    source.connect(dest) // silencioso: não conecta nas caixas de som
+    // Roteia pelo analyser: source → analyser → dest. O AudioContext do
+    // export roda em tempo real, então o visualizador usa dados REAIS de
+    // frequência também no vídeo final (sem fake bounce).
+    const analyserHandle = attachAnalyser(actx, source, dest)
 
     const videoStream = canvas.captureStream(0)
     const videoTrack = videoStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack
@@ -179,10 +183,10 @@ export function startVideoExport(
     // Desenha vários frames descartados para o JIT compilar os caminhos
     // quentes de desenho e o canvas alocar buffers — tudo fora do vídeo.
     for (let i = 0; i < 15; i++) {
-      drawFrame(ctx, cache, project, avatars, states, totals, (i * 0.2) % Math.max(total, 1))
+      drawFrame(ctx, cache, project, avatars, states, totals, (i * 0.2) % Math.max(total, 1), total)
     }
     states.clear()
-    drawFrame(ctx, cache, project, avatars, states, totals, 0)
+    drawFrame(ctx, cache, project, avatars, states, totals, 0, total)
 
     // ---------- 4b. Gravação com relógio do AudioContext ----------
     await actx.resume()
@@ -204,7 +208,17 @@ export function startVideoExport(
             resolve()
             return
           }
-          drawFrame(ctx, cache, project, avatars, states, totals, Math.max(0, t))
+          drawFrame(
+            ctx,
+            cache,
+            project,
+            avatars,
+            states,
+            totals,
+            Math.max(0, t),
+            total,
+            t >= 0 ? readFrequency(analyserHandle) : undefined,
+          )
           videoTrack.requestFrame()
           onFrame?.(canvas)
           onProgress(Math.min(1, Math.max(0, t) / total))

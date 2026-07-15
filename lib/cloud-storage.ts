@@ -20,6 +20,7 @@ interface ProjectRow {
   members: Member[]
   segments: Segment[]
   duration: number | null
+  format: string | null
   created_at: string
   updated_at: string
 }
@@ -43,6 +44,7 @@ function rowToProject(row: ProjectRow): Project {
     hasAudio: !!row.audio_path,
     audioName: row.audio_name ?? undefined,
     duration: row.duration ?? undefined,
+    format: row.format === 'horizontal' ? 'horizontal' : 'vertical',
     createdAt: new Date(row.created_at).getTime(),
     updatedAt: new Date(row.updated_at).getTime(),
   }
@@ -82,6 +84,7 @@ export async function upsertProjectCloud(project: Project, userId: string): Prom
     members: project.members,
     segments: project.segments,
     duration: project.duration ?? null,
+    format: project.format ?? 'vertical',
     updated_at: new Date().toISOString(),
   })
   if (error) throw error

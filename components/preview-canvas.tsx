@@ -11,13 +11,17 @@ import {
 } from 'react'
 import { Download, Pause, Play, Square, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  createElementAnalyser,
+  readFrequency,
+  type AnalyserHandle,
+} from '@/lib/audio-visualizer'
 import { loadImage } from '@/lib/image-utils'
 import {
   buildBackgroundCache,
   computeTotals,
   drawFrame,
-  VIDEO_H,
-  VIDEO_W,
+  videoDims,
   type MemberRenderState,
 } from '@/lib/renderer'
 import { downloadVideo, startVideoExport, type ExportController } from '@/lib/video-export'
@@ -47,6 +51,7 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
     const statesRef = useRef<Map<string, MemberRenderState>>(new Map())
     const rafRef = useRef<number>(0)
     const exportRef = useRef<ExportController | null>(null)
+    const analyserRef = useRef<AnalyserHandle | null>(null)
 
     const [playing, setPlaying] = useState(false)
     const playingRef = useRef(false)
@@ -60,6 +65,10 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
     projectRef.current = project
     const totalsRef = useRef(totals)
     totalsRef.current = totals
+    const durationRef = useRef(duration)
+    durationRef.current = duration
+
+    const dims = videoDims(project.format)
 
     useImperativeHandle(ref, () => ({
       getTime: () => audioRef.current?.currentTime ?? 0,
@@ -79,6 +88,11 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         statesRef.current,
         totalsRef.current,
         t,
+        durationRef.current || undefined,
+        // Espectro em tempo real (só existe depois do primeiro Play)
+        analyserRef.current && playingRef.current
+          ? readFrequency(analyserRef.current)
+          : undefined,
       )
     }, [])
 
@@ -137,6 +151,12 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         playingRef.current = false
         setPlaying(false)
       } else {
+        // Web Audio precisa de gesto do usuário: conecta o analyser aqui
+        try {
+          analyserRef.current = createElementAnalyser(audio)
+        } catch {
+          analyserRef.current = null // visualizador é opcional, áudio segue normal
+        }
         void audio.play()
         playingRef.current = true
         setPlaying(true)
@@ -218,13 +238,18 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
 
     return (
       <div className="flex h-full w-full min-w-0 flex-col items-center gap-3">
-        <div className="relative mx-auto min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-black">
+        <div
+          className={`relative mx-auto flex min-h-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-black ${
+            project.format === 'horizontal' ? 'w-full' : 'flex-1'
+          }`}
+        >
           <canvas
+            key={project.format ?? 'vertical'}
             ref={canvasRef}
-            width={VIDEO_W}
-            height={VIDEO_H}
-            className="h-full w-auto"
-            style={{ aspectRatio: '9 / 16' }}
+            width={dims.W}
+            height={dims.H}
+            className={project.format === 'horizontal' ? 'h-auto max-h-full w-full' : 'h-full w-auto'}
+            style={{ aspectRatio: project.format === 'horizontal' ? '16 / 9' : '9 / 16' }}
             aria-label="Pré-visualização do vídeo de line distribution"
           />
           {exporting && (
