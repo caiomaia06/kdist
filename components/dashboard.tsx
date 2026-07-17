@@ -5,6 +5,7 @@ import { LogOut, Mic2, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GroupsSection } from '@/components/groups-section'
 import { Logo } from '@/components/logo'
+import { ThemeSwitcher } from '@/components/theme-switcher'
 import { uid, type Group, type Project } from '@/lib/types'
 
 interface DashboardProps {
@@ -60,17 +61,22 @@ export function Dashboard({
             <Logo showWordmark className="size-11" wordmarkClassName="text-2xl" />
             <span className="sr-only">KDISTRIBUTION</span>
           </h1>
-          {onLogout && (
-            <div className="ml-auto flex items-center gap-2">
-              {userEmail && (
-                <span className="hidden text-xs text-muted-foreground sm:inline">{userEmail}</span>
-              )}
-              <Button size="sm" variant="ghost" onClick={onLogout}>
-                <LogOut className="size-4" />
-                Sair
-              </Button>
-            </div>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeSwitcher />
+            {onLogout && (
+              <>
+                {userEmail && (
+                  <span className="hidden text-xs text-muted-foreground sm:inline">
+                    {userEmail}
+                  </span>
+                )}
+                <Button size="sm" variant="ghost" onClick={onLogout}>
+                  <LogOut className="size-4" />
+                  Sair
+                </Button>
+              </>
+            )}
+          </div>
         </div>
         <p className="text-sm text-muted-foreground text-pretty">
           Crie e exporte vídeos de K-pop Line Distribution direto do navegador.

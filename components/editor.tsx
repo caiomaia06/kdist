@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Logo } from '@/components/logo'
 import { MembersPanel } from '@/components/members-panel'
 import { PreviewCanvas, type PreviewHandle } from '@/components/preview-canvas'
+import { ThemeSwitcher } from '@/components/theme-switcher'
 import { TimelinePanel } from '@/components/timeline-panel'
 import { getAudioUrlCloud, uploadAudioCloud, upsertProjectCloud } from '@/lib/cloud-storage'
 import { compressImage } from '@/lib/image-utils'
@@ -97,12 +98,13 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
           <ArrowLeft className="size-4" />
         </Button>
         <Logo className="size-8 shrink-0" />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-semibold">{project.title || 'Sem título'}</h1>
           <p className="truncate text-xs text-muted-foreground">
             {project.artist || 'Artista'} · salvo automaticamente
           </p>
         </div>
+        <ThemeSwitcher />
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 md:flex-row">
