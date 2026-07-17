@@ -95,7 +95,9 @@ export function drawVisualizer(
 ): void {
   const colors = activeSingerColors(project, t)
   const horizontal = project.format === 'horizontal'
-  const maxBarH = horizontal ? 110 : 150
+  // 16:9: ondas limitadas a 70px — o renderer reserva 110px de rodapé para
+  // as barras de ranking, garantindo margem clara de separação (40px)
+  const maxBarH = horizontal ? 70 : 150
   const baseY = H
   const bins = 56 // usa as frequências baixas/médias (onde mora a batida)
   const gap = 4

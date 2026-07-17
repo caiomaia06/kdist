@@ -115,9 +115,10 @@ function headerLayout(project: Project): HeaderLayout {
   const horizontal = project.format === 'horizontal'
   const hasCover = !!project.coverImage
   if (horizontal) {
+    // 16:9: header ~25% maior para ocupar melhor a largura do palco
     return hasCover
-      ? { coverSize: 110, coverCy: 100, labelY: 192, titleY: 252, artistY: 302, headerEndY: 315, titleFont: 54 }
-      : { coverSize: 0, coverCy: 0, labelY: 84, titleY: 152, artistY: 206, headerEndY: 220, titleFont: 54 }
+      ? { coverSize: 140, coverCy: 112, labelY: 232, titleY: 300, artistY: 356, headerEndY: 372, titleFont: 68 }
+      : { coverSize: 0, coverCy: 0, labelY: 104, titleY: 188, artistY: 248, headerEndY: 264, titleFont: 68 }
   }
   return hasCover
     ? { coverSize: 140, coverCy: 190, labelY: 320, titleY: 400, artistY: 460, headerEndY: 470, titleFont: 68 }
@@ -134,7 +135,11 @@ function hasAnyLyric(project: Project): boolean {
 function barsTop(project: Project): number {
   const lyrics = hasAnyLyric(project)
   if (project.format === 'horizontal') {
-    return headerLayout(project).headerEndY + (lyrics ? 400 : 260)
+    // 16:9: o bloco de barras vive na metade inferior da tela (H=1080).
+    // Garante espaço para a bolha 'Cantando Agora' (agora maior e mais
+    // central) + letras, e elimina o buraco vazio no meio do frame.
+    const minTop = headerLayout(project).headerEndY + (lyrics ? 330 : 200)
+    return Math.max(minTop, 560)
   }
   return project.coverImage ? (lyrics ? 790 : 700) : (lyrics ? 670 : 580)
 }
@@ -246,16 +251,17 @@ function easeOutCubic(x: number): number {
  */
 function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: number, W: number): void {
   const hl = headerLayout(project)
+  const horizontal = project.format === 'horizontal'
   const p = easeOutCubic(Math.min(1, t / 1.1)) // 0→1 em 1.1s
   const rise = (1 - p) * 46
 
   ctx.save()
   ctx.textAlign = 'center'
 
-  // Rótulo com tracking largo
+  // Rótulo com tracking largo (16:9: +25% de escala)
   ctx.globalAlpha = Math.min(1, p * 1.2) * 0.55
   ctx.fillStyle = '#ffffff'
-  ctx.font = '600 26px Unbounded, Outfit, sans-serif'
+  ctx.font = `600 ${horizontal ? 32 : 26}px Unbounded, Outfit, sans-serif`
   ctx.fillText('L I N E   D I S T R I B U T I O N', W / 2, hl.labelY + rise * 0.5)
 
   // Título em fonte display com glow rosa sutil
@@ -267,9 +273,9 @@ function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: numb
   ctx.fillText(project.title || 'Sem título', W / 2, hl.titleY + rise, W - 120)
   ctx.shadowBlur = 0
 
-  // Artista
+  // Artista (nome do grupo — 16:9: +25% de escala)
   ctx.globalAlpha = p * 0.7
-  ctx.font = '500 38px Outfit, sans-serif'
+  ctx.font = `500 ${horizontal ? 48 : 38}px Outfit, sans-serif`
   ctx.fillText(project.artist || '', W / 2, hl.artistY + rise, W - 160)
 
   ctx.restore()
@@ -477,18 +483,24 @@ export function drawFrame(
   // Layout vertical (zona reservada acima das barras para bolha + letras)
   const horizontal = project.format === 'horizontal'
   const topY = barsTop(project)
-  const bottomY = H - (horizontal ? 50 : 120)
+  // 16:9: margem inferior de 110px — zona exclusiva do visualizador (70px
+  // de onda máxima + 40px de folga), sem colisão com a barra do último membro
+  const bottomY = H - (horizontal ? 110 : 120)
   const availH = bottomY - topY
-  const rowH = Math.min(horizontal ? 140 : 190, availH / n)
+  // 16:9: linhas mais altas (160) = mais respiro vertical entre membros
+  const rowH = Math.min(horizontal ? 160 : 190, availH / n)
   const startY = topY + (availH - rowH * n) / 2
 
-  const r = Math.max(horizontal ? 22 : 38, Math.min(62, rowH * 0.32)) // raio do avatar
+  const r = Math.max(horizontal ? 24 : 38, Math.min(62, rowH * 0.32)) // raio do avatar
   const avatarCx = 90 + r
   const barX = avatarCx + r + 28
-  const barH = Math.max(horizontal ? 18 : 26, Math.min(40, rowH * 0.24))
+  // 16:9: barras ~20% mais grossas (18→22 mín, fração 0.24→0.28)
+  const barH = horizontal
+    ? Math.max(22, Math.min(46, rowH * 0.28))
+    : Math.max(26, Math.min(40, rowH * 0.24))
   const maxBarW = W - barX - 200
-  const nameFont = horizontal ? 28 : 34
-  const timeFont = horizontal ? 26 : 30
+  const nameFont = horizontal ? 30 : 34
+  const timeFont = horizontal ? 27 : 30
 
   for (const m of members) {
     let st = states.get(m.id)
@@ -768,9 +780,12 @@ function drawVoiceBubble(
   const singers = project.members.filter((m) => (states.get(m.id)?.glow ?? 0) > 0.05)
   if (singers.length === 0) return
 
+  const horizontal = project.format === 'horizontal'
+  // 16:9: bolha 25% maior para ocupar o centro do palco widescreen
+  const fmtScale = horizontal ? 1.25 : 1
   // Opacidade/escala da bolha = maior glow entre os cantores (pop suave)
   const a = Math.min(1, Math.max(...singers.map((m) => states.get(m.id)!.glow)))
-  const scale = 0.86 + 0.14 * a
+  const scale = (0.86 + 0.14 * a) * fmtScale
 
   const layers = activeLyricLayers(project, t)
   const hasLyric = !!(layers.hangul || layers.romanized || layers.translation)
@@ -779,7 +794,9 @@ function drawVoiceBubble(
   // Eixo Y TRAVADO de forma absoluta: a bolha fica sempre no mesmo lugar,
   // com ou sem letra, com 1 ou vários cantores. Só a largura cresce
   // horizontalmente (centralizada), então nada é empurrado para cima/baixo.
-  const bubbleCy = headerEndY + 92
+  // 16:9: centro geométrico entre o fim do header e o topo das barras —
+  // elimina o buraco vazio no meio da tela widescreen.
+  const bubbleCy = horizontal ? (headerEndY + barsTopY) / 2 : headerEndY + 92
 
   // Geometria: avatares sobrepostos + nomes
   const r = 52
@@ -859,8 +876,9 @@ function drawVoiceBubble(
   ctx.restore()
 
   // --- Letras sincronizadas em camadas (estilo K-pop edit) ---
+  // O offset considera a escala do formato (a bolha é maior no 16:9)
   if (hasLyric) {
-    drawLyricLayers(ctx, layers, mainColor, bubbleCy + cardH / 2 + 26, barsTopY, a, W)
+    drawLyricLayers(ctx, layers, mainColor, bubbleCy + (cardH * fmtScale) / 2 + 26, barsTopY, a, W)
   }
 }
 
