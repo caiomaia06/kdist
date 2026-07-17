@@ -70,7 +70,8 @@ export function readFrequency(handle: AnalyserHandle): Uint8Array {
 function activeSingerColors(project: Project, t: number): string[] {
   const ids = new Set(
     project.segments
-      .filter((s) => t >= s.startTime && t <= s.endTime)
+      // Fim estritamente exclusivo (t < endTime), igual ao isActive do renderer
+      .filter((s) => t >= s.startTime && t < s.endTime)
       .map((s) => s.memberId),
   )
   return project.members.filter((m) => ids.has(m.id)).map((m) => m.color)

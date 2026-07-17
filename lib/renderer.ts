@@ -151,8 +151,10 @@ export function computeTotals(project: Project): Map<string, number> {
 }
 
 function isActive(project: Project, memberId: string, t: number): boolean {
+  // Fim estritamente exclusivo (t < endTime): se A termina em 5.0s e B começa
+  // em 5.0s, no instante 5.0 só B está ativo — sem colisão de milissegundos.
   return project.segments.some(
-    (s) => s.memberId === memberId && t >= s.startTime && t <= s.endTime,
+    (s) => s.memberId === memberId && t >= s.startTime && t < s.endTime,
   )
 }
 
@@ -223,7 +225,14 @@ export function drawFrame(
   const n = members.length
 
   // --- Tela de Ranking Final nos últimos segundos ---
-  const rankingStart = duration && duration > FINAL_RANKING_SECS + 3 ? duration - FINAL_RANKING_SECS : Infinity
+  // O ranking SÓ pode ativar depois que a ÚLTIMA linha da timeline terminou
+  // (endTime absoluto máximo) + margem de segurança de 0.5s. A duração do
+  // áudio sozinha não basta: nunca sobrepor o ranking a alguém cantando.
+  const lastSegmentEnd = project.segments.reduce((acc, s) => Math.max(acc, s.endTime), 0)
+  const rankingStart =
+    duration && duration > FINAL_RANKING_SECS + 3
+      ? Math.max(duration - FINAL_RANKING_SECS, lastSegmentEnd + 0.5)
+      : Infinity
   if (n > 0 && t >= rankingStart) {
     drawFinalRanking(ctx, project, avatars, totals, t - rankingStart, W, H)
     return
@@ -397,8 +406,9 @@ function activeLyricLayers(project: Project, t: number): {
   romanized: string
   translation: string
 } {
+  // Mesmo critério do isActive: fim estritamente exclusivo (t < endTime)
   const active = project.segments.filter(
-    (s) => t >= s.startTime && t <= s.endTime,
+    (s) => t >= s.startTime && t < s.endTime,
   )
   const uniq = (vals: (string | undefined)[]) => [...new Set(vals.map((v) => v?.trim()).filter(Boolean))] as string[]
   return {
@@ -435,8 +445,10 @@ function drawVoiceBubble(
   const hasLyric = !!(layers.hangul || layers.romanized || layers.translation)
 
   const headerEndY = headerLayout(project).headerEndY
-  // Com letra, a bolha sobe para abrir espaço para o texto abaixo dela
-  const bubbleCy = hasLyric ? headerEndY + 92 : (headerEndY + barsTopY) / 2 + 10
+  // Eixo Y TRAVADO de forma absoluta: a bolha fica sempre no mesmo lugar,
+  // com ou sem letra, com 1 ou vários cantores. Só a largura cresce
+  // horizontalmente (centralizada), então nada é empurrado para cima/baixo.
+  const bubbleCy = headerEndY + 92
 
   // Geometria: avatares sobrepostos + nomes
   const r = 52
