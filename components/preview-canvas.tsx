@@ -341,10 +341,10 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
     const canPlay = Boolean(audioUrl)
 
     return (
-      <div className="flex h-full w-full min-w-0 flex-col items-center gap-3">
+      <div className="flex h-full w-full min-w-0 flex-col items-center gap-2 md:gap-3">
         <div
-          className={`relative mx-auto flex min-h-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-black ${
-            project.format === 'horizontal' ? 'w-full' : 'flex-1'
+          className={`relative mx-auto flex min-h-0 max-w-full items-center justify-center overflow-hidden rounded-xl border border-border bg-black ${
+            project.format === 'horizontal' ? 'w-full flex-1 md:flex-none' : 'flex-1'
           }`}
         >
           <canvas
@@ -352,7 +352,11 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
             ref={canvasRef}
             width={dims.W}
             height={dims.H}
-            className={project.format === 'horizontal' ? 'h-auto max-h-full w-full' : 'h-full w-auto'}
+            className={
+              project.format === 'horizontal'
+                ? 'h-auto max-h-full w-full max-w-full'
+                : 'h-full w-auto max-w-full object-contain'
+            }
             style={{ aspectRatio: project.format === 'horizontal' ? '16 / 9' : '9 / 16' }}
             aria-label="Pré-visualização do vídeo de line distribution"
           />
@@ -400,7 +404,7 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
           crossOrigin="anonymous"
         />
 
-        <div className="flex w-full max-w-xl items-center gap-3">
+        <div className="flex w-full max-w-xl items-center gap-2 md:gap-3">
           <Button
             size="icon"
             variant="secondary"
@@ -410,7 +414,7 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
           >
             {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
           </Button>
-          <span className="w-12 text-right font-mono text-xs text-muted-foreground">
+          <span className="w-10 text-right font-mono text-xs text-muted-foreground md:w-12">
             {formatTime(time)}
           </span>
           <input
@@ -424,12 +428,16 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
             className="min-w-0 flex-1 accent-primary"
             aria-label="Posição do vídeo"
           />
-          <span className="w-12 font-mono text-xs text-muted-foreground">
+          <span className="w-10 font-mono text-xs text-muted-foreground md:w-12">
             {formatTime(timing.totalDur)}
           </span>
-          <Button onClick={startExport} disabled={!canPlay || exporting || !duration}>
+          <Button
+            onClick={startExport}
+            disabled={!canPlay || exporting || !duration}
+            aria-label="Exportar vídeo"
+          >
             <Download className="size-4" />
-            Exportar
+            <span className="hidden md:inline-block">Exportar</span>
           </Button>
         </div>
       </div>

@@ -107,14 +107,16 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
         <ThemeSwitcher />
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 md:flex-row">
-        {/* Preview */}
-        <div className="flex min-h-0 min-w-0 flex-1 justify-center">
+      {/* Mobile: página inteira rola (flex-col) com player fixo no topo.
+          Desktop: layout lado a lado com scroll apenas nos painéis. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 pb-24 md:flex-row md:overflow-hidden md:p-4 md:pb-4">
+        {/* Preview — sticky no mobile: sempre visível ao rolar a timeline */}
+        <div className="sticky top-0 z-50 -mx-3 -mt-3 h-[46dvh] shrink-0 bg-background/95 px-3 pt-2 pb-2 backdrop-blur-sm md:static md:z-auto md:mx-0 md:mt-0 md:flex md:h-auto md:min-h-0 md:min-w-0 md:flex-1 md:shrink md:justify-center md:bg-transparent md:p-0 md:backdrop-blur-none">
           <PreviewCanvas ref={previewRef} project={project} audioUrl={audioUrl} />
         </div>
 
-        {/* Painéis */}
-        <aside className="flex w-full flex-col gap-3 overflow-y-auto md:w-[360px] md:shrink-0">
+        {/* Painéis: abas logo abaixo do vídeo no mobile, sidebar no desktop */}
+        <aside className="flex w-full flex-col gap-3 md:w-[360px] md:shrink-0 md:overflow-y-auto">
           <div className="flex gap-1 rounded-lg bg-secondary p-1" role="tablist">
             {tabs.map((t) => (
               <button
@@ -122,7 +124,7 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
                 role="tab"
                 aria-selected={tab === t.id}
                 onClick={() => setTab(t.id)}
-                className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-200 ease-in-out ${
+                className={`min-h-11 flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-200 ease-in-out md:min-h-0 ${
                   tab === t.id
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'

@@ -49,7 +49,7 @@ function LyricFields({
   }
 
   const inputClass =
-    'h-7 min-w-0 flex-1 rounded border border-input bg-transparent px-1.5 text-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring'
+    'h-11 min-w-0 flex-1 rounded border border-input bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring md:h-7 md:px-1.5'
 
   return (
     <div className="flex flex-col gap-1 pl-5">
@@ -68,17 +68,18 @@ function LyricFields({
         <Button
           size="sm"
           variant="secondary"
-          className="h-7 px-2 text-xs"
+          className="h-11 px-2.5 text-xs md:h-7 md:px-2"
           onClick={autoTranslate}
           disabled={!sourceText || translating}
           title="Preenche romanização e tradução automaticamente com IA"
+          aria-label="Auto-traduzir letra"
         >
           {translating ? (
             <Loader2 className="size-3.5 animate-spin" />
           ) : (
             <Languages className="size-3.5" />
           )}
-          Auto
+          <span className="hidden md:inline-block">Auto</span>
         </Button>
       </div>
       <div className="flex items-center gap-1.5 pl-5">
@@ -264,7 +265,7 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
                 type="button"
                 onClick={() => toggleMember(m.id)}
                 aria-pressed={active}
-                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all duration-200 ease-in-out hover:-translate-y-0.5 ${
+                className={`flex min-h-11 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all duration-200 ease-in-out hover:-translate-y-0.5 md:min-h-0 md:px-2.5 ${
                   active
                     ? 'border-transparent text-background shadow-md'
                     : 'border-border bg-card text-foreground hover:bg-secondary'
@@ -292,7 +293,7 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
           onClick={toggleRecord}
           disabled={selectedIds.length === 0}
           title="Marca início/fim usando o tempo atual do player"
-          className="self-start"
+          className="min-h-11 self-start md:min-h-0"
         >
           <CircleDot className="size-4" />
           {recording ? `Finalizar (${fmt(recording.startTime)}s → agora)` : 'Gravar ao vivo'}
@@ -332,7 +333,7 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
           value={start}
           onChange={(e) => setStart(e.target.value)}
           placeholder="Início (s)"
-          className="h-9 w-24 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="h-11 w-24 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-9 md:flex-none"
           aria-label="Tempo de início em segundos"
         />
         <input
@@ -342,12 +343,18 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
           value={end}
           onChange={(e) => setEnd(e.target.value)}
           placeholder="Fim (s)"
-          className="h-9 w-24 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="h-11 w-24 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-9 md:flex-none"
           aria-label="Tempo de fim em segundos"
         />
-        <Button size="sm" onClick={addSegment} disabled={selectedIds.length === 0 || !start || !end}>
+        <Button
+          size="sm"
+          className="h-11 shrink-0 md:h-8"
+          onClick={addSegment}
+          disabled={selectedIds.length === 0 || !start || !end}
+          aria-label="Adicionar segmento"
+        >
           <Plus className="size-4" />
-          Segmento
+          <span className="hidden md:inline-block">Segmento</span>
         </Button>
       </div>
 
@@ -363,15 +370,17 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
           return (
             <li
               key={s.id}
-              className="flex flex-col gap-1.5 rounded-md border border-border bg-card px-2 py-1.5 text-sm transition-all duration-200 ease-in-out animate-in fade-in slide-in-from-top-1 hover:border-primary/40 hover:bg-secondary/60"
+              className="flex flex-col gap-1.5 rounded-md border border-border bg-card px-2 py-2.5 text-sm transition-all duration-200 ease-in-out animate-in fade-in slide-in-from-top-1 hover:border-primary/40 hover:bg-secondary/60 md:py-1.5"
             >
-              <div className="flex items-center gap-2">
+              {/* Mobile: controles com rolagem horizontal própria (touch-pan-x)
+                  para não empurrar a página; hitboxes ≥44px para o dedo */}
+              <div className="flex touch-pan-x items-center gap-2 overflow-x-auto md:overflow-x-visible">
                 <span
                   className="size-3 shrink-0 rounded-full"
                   style={{ backgroundColor: m?.color ?? '#888' }}
                   aria-hidden="true"
                 />
-                <span className="min-w-0 flex-1 truncate font-medium">
+                <span className="min-w-16 flex-1 truncate font-medium md:min-w-0">
                   {m?.name ?? 'Membro removido'}
                 </span>
                 <button
@@ -380,14 +389,14 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
                   aria-checked={!!s.isAdlib}
                   onClick={() => updateSegment(s.id, { isAdlib: !s.isAdlib || undefined })}
                   title="Ad-lib: vocal de apoio, aparece em área secundária no vídeo"
-                  className={`flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors ${
+                  className={`flex min-h-11 shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors md:min-h-0 md:px-2 ${
                     s.isAdlib
                       ? 'border-primary bg-primary/20 text-primary'
                       : 'border-border text-muted-foreground hover:bg-secondary'
                   }`}
                 >
                   <Music className="size-3" aria-hidden="true" />
-                  Ad-lib
+                  <span className="hidden md:inline-block">Ad-lib</span>
                 </button>
                 <input
                   type="number"
@@ -395,23 +404,23 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
                   step={0.1}
                   value={s.startTime}
                   onChange={(e) => updateSegment(s.id, { startTime: Number(e.target.value) })}
-                  className="h-7 w-20 rounded border border-input bg-transparent px-1.5 text-xs outline-none"
+                  className="h-11 w-20 shrink-0 rounded border border-input bg-transparent px-1.5 text-xs outline-none md:h-7"
                   aria-label="Início"
                 />
-                <span className="text-muted-foreground">→</span>
+                <span className="shrink-0 text-muted-foreground">→</span>
                 <input
                   type="number"
                   min={0}
                   step={0.1}
                   value={s.endTime}
                   onChange={(e) => updateSegment(s.id, { endTime: Number(e.target.value) })}
-                  className="h-7 w-20 rounded border border-input bg-transparent px-1.5 text-xs outline-none"
+                  className="h-11 w-20 shrink-0 rounded border border-input bg-transparent px-1.5 text-xs outline-none md:h-7"
                   aria-label="Fim"
                 />
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="size-7"
+                  className="size-11 shrink-0 md:size-7"
                   onClick={() => removeSegment(s.id)}
                   aria-label="Remover segmento"
                 >
