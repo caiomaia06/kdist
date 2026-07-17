@@ -62,9 +62,9 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
     const [exportProgress, setExportProgress] = useState(0)
 
     // Máquina de estados do relógio de VÍDEO:
-    // 'intro'/'outro' rodam num relógio próprio (performance.now); 'main' usa
-    // o currentTime do áudio como fonte única de verdade (zero drift).
-    const phaseRef = useRef<'intro' | 'main' | 'outro'>('main')
+    // 'intro'/'ranking'/'outro' rodam num relógio próprio (performance.now);
+    // 'main' usa o currentTime do áudio como fonte única de verdade (zero drift).
+    const phaseRef = useRef<'intro' | 'main' | 'ranking' | 'outro'>('main')
     const phaseStartRef = useRef(0) // performance.now (ms) do início da fase
     const videoTimeRef = useRef(0) // tempo de vídeo atual (inclui intro/outro)
 
@@ -123,14 +123,19 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         phaseStartRef.current = performance.now() - vt * 1000
         audio.pause() // o áudio só entra quando a intro terminar
         audio.currentTime = 0
-      } else if (vt < t.introDur + t.audioDur) {
+      } else if (vt < t.introDur + t.mainDur) {
         phaseRef.current = 'main'
         audio.currentTime = vt - t.introDur
         if (play) void audio.play()
         else audio.pause()
+      } else if (vt < t.introDur + t.mainDur + t.rankingDur) {
+        phaseRef.current = 'ranking'
+        phaseStartRef.current = performance.now() - (vt - t.introDur - t.mainDur) * 1000
+        audio.pause()
       } else {
         phaseRef.current = 'outro'
-        phaseStartRef.current = performance.now() - (vt - t.introDur - t.audioDur) * 1000
+        phaseStartRef.current =
+          performance.now() - (vt - t.introDur - t.mainDur - t.rankingDur) * 1000
         audio.pause()
       }
     }, [])
@@ -164,7 +169,7 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
       }
     }, [project, renderAt])
 
-    // Loop de preview (rAF) — máquina de estados INTRO → MAIN → OUTRO.
+    // Loop de preview (rAF) — máquina de estados INTRO → MAIN → RANKING → OUTRO.
     // A UI é atualizada com throttle; o tempo de VÍDEO é a linha do tempo.
     useEffect(() => {
       if (!playing || exporting) return
@@ -188,9 +193,34 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         } else if (phaseRef.current === 'main') {
           // O currentTime do áudio é a única fonte de verdade — zero drift
           vt = t.introDur + (audio?.currentTime ?? 0)
+          if (vt >= t.introDur + t.mainDur - 0.02) {
+            // MAIN terminou (áudio acabou ou silêncio final cortado):
+            // entra a fase RANKING de 5s com relógio próprio
+            phaseRef.current = 'ranking'
+            phaseStartRef.current = performance.now()
+            audio?.pause()
+            vt = t.introDur + t.mainDur
+          }
+        } else if (phaseRef.current === 'ranking') {
+          vt = t.introDur + t.mainDur + (performance.now() - phaseStartRef.current) / 1000
+          if (vt >= t.introDur + t.mainDur + t.rankingDur) {
+            if (t.outroDur > 0) {
+              phaseRef.current = 'outro'
+              phaseStartRef.current = performance.now()
+              vt = t.introDur + t.mainDur + t.rankingDur
+            } else {
+              videoTimeRef.current = t.totalDur
+              renderAt(t.totalDur)
+              setTime(t.totalDur)
+              playingRef.current = false
+              setPlaying(false)
+              return
+            }
+          }
         } else {
-          // outro: relógio próprio após o fim do áudio
-          vt = t.introDur + t.audioDur + (performance.now() - phaseStartRef.current) / 1000
+          // outro: relógio próprio após o ranking
+          vt =
+            t.introDur + t.mainDur + t.rankingDur + (performance.now() - phaseStartRef.current) / 1000
           if (vt >= t.totalDur) {
             videoTimeRef.current = t.totalDur
             renderAt(t.totalDur)
@@ -359,12 +389,11 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
           src={audioUrl ?? undefined}
           onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
           onEnded={() => {
-            // Áudio acabou: se o Outro está ativo, a máquina segue para ele
-            if (projectRef.current.outroEnabled) {
-              phaseRef.current = 'outro'
-              phaseStartRef.current = performance.now()
-              return
-            }
+            // Áudio acabou: se ainda estamos em MAIN, o loop rAF fará a
+            // transição para RANKING (currentTime fica travado no fim).
+            // Se há ranking ou outro pela frente, o vídeo continua sozinho.
+            const t = videoTiming(projectRef.current, durationRef.current)
+            if (playingRef.current && (t.rankingDur > 0 || t.outroDur > 0)) return
             playingRef.current = false
             setPlaying(false)
           }}

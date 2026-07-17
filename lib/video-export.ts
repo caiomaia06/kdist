@@ -140,8 +140,9 @@ export function startVideoExport(
     if (cancelled) throw new Error('cancelled')
 
     const total = Math.min(duration, audioBuffer.duration)
-    // Máquina de estados: INTRO (opcional) → MAIN/RANKING → OUTRO (opcional).
-    // O vídeo dura totalDur; o áudio sofre delay de introDur para começar.
+    // Máquina de estados: INTRO (opc.) → MAIN → RANKING (5s) → OUTRO (opc.).
+    // Total = intro + main + 5s de ranking + outro; o áudio sofre delay de
+    // introDur e é interrompido no fim do MAIN (silêncio final cortado).
     const timing = videoTiming(project, total)
 
     // ---------- 2. Canvas offscreen + cache de fundo ----------
@@ -203,6 +204,9 @@ export function startVideoExport(
     // Com Intro ativa, o áudio sofre delay EXTRA de introDur segundos,
     // agendado no relógio do AudioContext (sincronia perfeita, sem drift).
     source.start(t0 + PREROLL + timing.introDur)
+    // Para o áudio no fim do MAIN: se a música tem silêncio longo no final,
+    // ele não vaza para dentro das fases RANKING/OUTRO.
+    source.stop(t0 + PREROLL + timing.introDur + timing.mainDur)
     videoTrack.requestFrame()
 
     await new Promise<void>((resolve) => {
@@ -217,7 +221,7 @@ export function startVideoExport(
             return
           }
           // Espectro real só na fase MAIN (quando o áudio está tocando)
-          const inMain = vt >= timing.introDur && vt < timing.introDur + total
+          const inMain = vt >= timing.introDur && vt < timing.introDur + timing.mainDur
           drawVideoFrame(
             ctx,
             cache,

@@ -28,37 +28,57 @@ export const DEFAULT_OUTRO_TEXT = 'Thanks for watching!'
 /** Estados da máquina de renderização do vídeo. */
 export type VideoState = 'INTRO' | 'MAIN' | 'RANKING' | 'OUTRO'
 
+/** Silêncio máximo tolerado após a última linha antes de cortar o MAIN. */
+export const MAX_TRAILING_SILENCE_SECS = 4
+
 export interface VideoTiming {
   introDur: number // 0 ou INTRO_SECS
+  mainDur: number // fase MAIN (música); pode ser < audioDur se houver silêncio longo
+  rankingDur: number // fase RANKING dedicada (FINAL_RANKING_SECS se houver membros)
   outroDur: number // 0 ou OUTRO_SECS
-  audioDur: number // duração do áudio (fase MAIN + RANKING)
+  audioDur: number // duração real do áudio
   totalDur: number // duração total do vídeo exportado
 }
 
 /**
  * Linha do tempo do VÍDEO (não do áudio):
- *   [INTRO 0..introDur] [MAIN/RANKING introDur..introDur+audioDur] [OUTRO ...totalDur]
- * O áudio sofre delay de introDur para começar a tocar.
+ *   [INTRO] [MAIN] [RANKING 5s] [OUTRO]
+ * O áudio sofre delay de introDur. O MAIN roda até o áudio acabar — ou, se
+ * houver muito silêncio no fim da música, até MAX_TRAILING_SILENCE_SECS
+ * depois da última linha cantada (o silêncio excedente vira RANKING).
  */
 export function videoTiming(project: Project, audioDur: number): VideoTiming {
   const introDur = project.introEnabled ? INTRO_SECS : 0
   const outroDur = project.outroEnabled ? OUTRO_SECS : 0
-  return { introDur, outroDur, audioDur, totalDur: audioDur + introDur + outroDur }
+  const lastSegmentEnd = project.segments.reduce((acc, s) => Math.max(acc, s.endTime), 0)
+  const mainDur =
+    lastSegmentEnd > 0
+      ? Math.min(audioDur, lastSegmentEnd + MAX_TRAILING_SILENCE_SECS)
+      : audioDur
+  const rankingDur = project.members.length > 0 ? FINAL_RANKING_SECS : 0
+  return {
+    introDur,
+    mainDur,
+    rankingDur,
+    outroDur,
+    audioDur,
+    totalDur: introDur + mainDur + rankingDur + outroDur,
+  }
 }
 
 /** Estado atual da máquina para um tempo de VÍDEO vt. */
 export function videoStateAt(project: Project, vt: number, audioDur: number): VideoState {
-  const { introDur, outroDur } = videoTiming(project, audioDur)
+  const { introDur, mainDur, rankingDur } = videoTiming(project, audioDur)
   if (vt < introDur) return 'INTRO'
-  if (outroDur > 0 && vt >= introDur + audioDur) return 'OUTRO'
-  // RANKING é um sub-estado do fim do áudio, resolvido dentro do drawFrame
-  return 'MAIN'
+  if (vt < introDur + mainDur) return 'MAIN'
+  if (vt < introDur + mainDur + rankingDur) return 'RANKING'
+  return 'OUTRO'
 }
 
-/** Converte tempo de vídeo → tempo de áudio (clampado à duração da música). */
+/** Converte tempo de vídeo → tempo de áudio (clampado à fase MAIN). */
 export function videoToAudioTime(project: Project, vt: number, audioDur: number): number {
-  const { introDur } = videoTiming(project, audioDur)
-  return Math.max(0, Math.min(audioDur, vt - introDur))
+  const { introDur, mainDur } = videoTiming(project, audioDur)
+  return Math.max(0, Math.min(mainDur, vt - introDur))
 }
 
 export function lerp(a: number, b: number, t: number): number {
@@ -70,8 +90,13 @@ export interface MemberRenderState {
   y: number
   barW: number
   glow: number
+  scale: number // câmera dinâmica: zoom suave do avatar (Ken Burns)
   initialized: boolean
 }
+
+/** Escalas-alvo da câmera dinâmica nos avatares. */
+const ACTIVE_SCALE = 1.15 // membro cantando: 15% de zoom
+const INACTIVE_SCALE = 0.95 // inativos recuam para dar profundidade
 
 // ---------- Layout do cabeçalho por formato ----------
 
@@ -258,17 +283,23 @@ export function drawVideoFrame(
 ): void {
   const { W, H } = videoDims(project.format)
   const state = videoStateAt(project, vt, audioDur)
-  const { introDur } = videoTiming(project, audioDur)
+  const { introDur, mainDur, rankingDur } = videoTiming(project, audioDur)
 
   if (state === 'INTRO') {
     drawIntroScreen(ctx, project, vt, W, H)
     return
   }
-  if (state === 'OUTRO') {
-    drawOutroScreen(ctx, project, vt - introDur - audioDur, W, H)
+  if (state === 'RANKING') {
+    // Fase dedicada de 5s: fundo do projeto + placar com fade-in suave
+    ctx.drawImage(cache, 0, 0)
+    drawFinalRanking(ctx, project, avatars, totals, vt - introDur - mainDur, W, H)
     return
   }
-  // MAIN (e RANKING, resolvido internamente pelo drawFrame)
+  if (state === 'OUTRO') {
+    drawOutroScreen(ctx, project, vt - introDur - mainDur - rankingDur, W, H)
+    return
+  }
+  // MAIN: tempo de áudio = vt - introDur (sincronia intacta)
   drawFrame(ctx, cache, project, avatars, states, totals, vt - introDur, audioDur, freq)
 }
 
@@ -406,19 +437,8 @@ export function drawFrame(
   const members = project.members
   const n = members.length
 
-  // --- Tela de Ranking Final nos últimos segundos ---
-  // O ranking SÓ pode ativar depois que a ÚLTIMA linha da timeline terminou
-  // (endTime absoluto máximo) + margem de segurança de 0.5s. A duração do
-  // áudio sozinha não basta: nunca sobrepor o ranking a alguém cantando.
-  const lastSegmentEnd = project.segments.reduce((acc, s) => Math.max(acc, s.endTime), 0)
-  const rankingStart =
-    duration && duration > FINAL_RANKING_SECS + 3
-      ? Math.max(duration - FINAL_RANKING_SECS, lastSegmentEnd + 0.5)
-      : Infinity
-  if (n > 0 && t >= rankingStart) {
-    drawFinalRanking(ctx, project, avatars, totals, t - rankingStart, W, H)
-    return
-  }
+  // (O Ranking Final agora é uma fase dedicada da máquina de estados,
+  //  despachada pelo drawVideoFrame — nunca sobrepõe alguém cantando.)
 
   // --- Visualizador de espectro (camada de fundo, atrás das barras) ---
   if (freq) drawVisualizer(ctx, project, freq, t, W, H)
@@ -466,14 +486,21 @@ export function drawFrame(
     const active = isActive(project, m.id, t)
 
     if (!st || !st.initialized) {
-      st = { y: targetY, barW: targetW, glow: active ? 1 : 0, initialized: true }
+      st = {
+        y: targetY,
+        barW: targetW,
+        glow: active ? 1 : 0,
+        scale: active ? ACTIVE_SCALE : INACTIVE_SCALE,
+        initialized: true,
+      }
       states.set(m.id, st)
     }
 
-    // Lerp: posição Y (troca de ranking fluida), largura e glow (fade in/out)
+    // Lerp: posição Y (troca de ranking fluida), largura, glow e câmera
     st.y = lerp(st.y, targetY, 0.12)
     st.barW = lerp(st.barW, targetW, 0.18)
     st.glow = lerp(st.glow, active ? 1 : 0, 0.14)
+    st.scale = lerp(st.scale, active ? ACTIVE_SCALE : INACTIVE_SCALE, 0.1)
 
     const cy = st.y
     const glow = st.glow
@@ -483,6 +510,16 @@ export function drawFrame(
     const ringColor = left ? desaturateColor(m.color) : m.color
 
     ctx.globalAlpha = alpha
+
+    // --- Câmera Dinâmica (Ken Burns): zoom centralizado SÓ no avatar ---
+    // Pulsação lenta ("respirar") proporcional ao glow — baseada em t (tempo
+    // do vídeo), não em Date.now(), para a exportação ser determinística.
+    const breath = Math.sin(t * Math.PI) * 0.02 * glow
+    const camScale = st.scale + breath
+    ctx.save()
+    ctx.translate(avatarCx, cy)
+    ctx.scale(camScale, camScale)
+    ctx.translate(-avatarCx, -cy)
 
     // --- Círculo colorido atrás do avatar (recebe o neon) ---
     if (!left && glow > 0.02) {
@@ -502,6 +539,18 @@ export function drawFrame(
     } else {
       drawAvatar(ctx, avatarImg, m.name, avatarCx, cy, r)
     }
+
+    // Ícone de "saiu do chat" acompanha o zoom para ficar preso à borda
+    if (left) {
+      ctx.globalAlpha = Math.min(1, alpha * 2.2)
+      drawOffBadge(ctx, avatarCx, cy, r)
+      ctx.globalAlpha = alpha
+    }
+
+    // Restaura a transformação: nome, barra e tempo ficam SEM zoom,
+    // perfeitamente alinhados na grade original.
+    ctx.restore()
+    ctx.globalAlpha = alpha
 
     // --- Nome ---
     ctx.fillStyle = '#ffffff'
@@ -524,12 +573,6 @@ export function drawFrame(
     ctx.fillStyle = 'rgba(255,255,255,0.9)'
     ctx.font = `600 ${timeFont}px Outfit, sans-serif`
     ctx.fillText(`${(sung.get(m.id) ?? 0).toFixed(1)}s`, barX + w + 18, cy + barH / 2)
-
-    // --- Ícone de status: porta no canto do avatar (fica até o fim) ---
-    if (left) {
-      ctx.globalAlpha = Math.min(1, alpha * 2.2) // badge mais visível que o resto
-      drawOffBadge(ctx, avatarCx, cy, r)
-    }
 
     ctx.globalAlpha = 1
   }
