@@ -20,6 +20,47 @@ export function videoDims(format?: VideoFormat): { W: number; H: number } {
 /** Duração da tela de Ranking Final no fim do áudio (segundos). */
 export const FINAL_RANKING_SECS = 5
 
+/** Duração das telas cinematográficas de entrada e saída (segundos). */
+export const INTRO_SECS = 3
+export const OUTRO_SECS = 3
+export const DEFAULT_OUTRO_TEXT = 'Thanks for watching!'
+
+/** Estados da máquina de renderização do vídeo. */
+export type VideoState = 'INTRO' | 'MAIN' | 'RANKING' | 'OUTRO'
+
+export interface VideoTiming {
+  introDur: number // 0 ou INTRO_SECS
+  outroDur: number // 0 ou OUTRO_SECS
+  audioDur: number // duração do áudio (fase MAIN + RANKING)
+  totalDur: number // duração total do vídeo exportado
+}
+
+/**
+ * Linha do tempo do VÍDEO (não do áudio):
+ *   [INTRO 0..introDur] [MAIN/RANKING introDur..introDur+audioDur] [OUTRO ...totalDur]
+ * O áudio sofre delay de introDur para começar a tocar.
+ */
+export function videoTiming(project: Project, audioDur: number): VideoTiming {
+  const introDur = project.introEnabled ? INTRO_SECS : 0
+  const outroDur = project.outroEnabled ? OUTRO_SECS : 0
+  return { introDur, outroDur, audioDur, totalDur: audioDur + introDur + outroDur }
+}
+
+/** Estado atual da máquina para um tempo de VÍDEO vt. */
+export function videoStateAt(project: Project, vt: number, audioDur: number): VideoState {
+  const { introDur, outroDur } = videoTiming(project, audioDur)
+  if (vt < introDur) return 'INTRO'
+  if (outroDur > 0 && vt >= introDur + audioDur) return 'OUTRO'
+  // RANKING é um sub-estado do fim do áudio, resolvido dentro do drawFrame
+  return 'MAIN'
+}
+
+/** Converte tempo de vídeo → tempo de áudio (clampado à duração da música). */
+export function videoToAudioTime(project: Project, vt: number, audioDur: number): number {
+  const { introDur } = videoTiming(project, audioDur)
+  return Math.max(0, Math.min(audioDur, vt - introDur))
+}
+
 export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
@@ -196,6 +237,147 @@ function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: numb
 
   ctx.restore()
   ctx.textAlign = 'left'
+}
+
+/**
+ * Entry-point da máquina de estados do vídeo: recebe o tempo de VÍDEO
+ * (vt) e despacha para INTRO / MAIN+RANKING / OUTRO. O drawFrame original
+ * permanece intacto — continua recebendo tempo de ÁUDIO, preservando toda a
+ * sincronia existente (barras, letras, ranking, visualizador).
+ */
+export function drawVideoFrame(
+  ctx: CanvasRenderingContext2D,
+  cache: HTMLCanvasElement,
+  project: Project,
+  avatars: Map<string, HTMLImageElement>,
+  states: Map<string, MemberRenderState>,
+  totals: Map<string, number>,
+  vt: number,
+  audioDur: number,
+  freq?: Uint8Array,
+): void {
+  const { W, H } = videoDims(project.format)
+  const state = videoStateAt(project, vt, audioDur)
+  const { introDur } = videoTiming(project, audioDur)
+
+  if (state === 'INTRO') {
+    drawIntroScreen(ctx, project, vt, W, H)
+    return
+  }
+  if (state === 'OUTRO') {
+    drawOutroScreen(ctx, project, vt - introDur - audioDur, W, H)
+    return
+  }
+  // MAIN (e RANKING, resolvido internamente pelo drawFrame)
+  drawFrame(ctx, cache, project, avatars, states, totals, vt - introDur, audioDur, freq)
+}
+
+/**
+ * Tela de INTRO (0..INTRO_SECS): fundo escuro, nome do grupo (menor) e
+ * título da música (maior, negrito) centralizados. Fade in no primeiro
+ * segundo, fade out no último.
+ */
+function drawIntroScreen(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  t: number,
+  W: number,
+  H: number,
+): void {
+  // Fundo totalmente escuro (mesma paleta do fundo do projeto)
+  const grad = ctx.createLinearGradient(0, 0, 0, H)
+  grad.addColorStop(0, '#100c18')
+  grad.addColorStop(1, '#07050c')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, W, H)
+
+  // Fade in (1º segundo) e fade out (último segundo)
+  const fadeIn = easeOutCubic(Math.min(1, t / 1))
+  const fadeOut = Math.min(1, Math.max(0, (INTRO_SECS - t) / 1))
+  const a = Math.min(fadeIn, fadeOut)
+  const rise = (1 - fadeIn) * 30 // leve slide-up na entrada
+
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  const horizontal = project.format === 'horizontal'
+  const cy = H / 2
+
+  // Nome do grupo (fonte menor, tracking largo)
+  ctx.globalAlpha = a * 0.7
+  ctx.fillStyle = '#ffffff'
+  ctx.font = `600 ${horizontal ? 34 : 40}px Outfit, sans-serif`
+  ctx.fillText((project.artist || '').toUpperCase(), W / 2, cy - (horizontal ? 64 : 80) + rise, W - 160)
+
+  // Título da música (fonte maior, negrito, glow rosa)
+  ctx.globalAlpha = a
+  ctx.shadowColor = 'rgba(236, 72, 153, 0.55)'
+  ctx.shadowBlur = 34 * a
+  ctx.font = `800 ${horizontal ? 72 : 84}px Unbounded, Outfit, sans-serif`
+  ctx.fillText(project.title || 'Sem título', W / 2, cy + (horizontal ? 16 : 20) + rise, W - 140)
+  ctx.shadowBlur = 0
+
+  // Linha decorativa sutil abaixo do título
+  ctx.globalAlpha = a * 0.35
+  ctx.fillStyle = '#ec4899'
+  const lineW = 120 * fadeIn
+  ctx.fillRect(W / 2 - lineW / 2, cy + (horizontal ? 90 : 110), lineW, 4)
+
+  ctx.restore()
+  ctx.globalAlpha = 1
+}
+
+/**
+ * Tela de OUTRO (últimos OUTRO_SECS): fade do ranking para tela escura com
+ * o texto de encerramento centralizado, com transição suave nas duas pontas.
+ */
+function drawOutroScreen(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  t: number, // 0..OUTRO_SECS dentro do outro
+  W: number,
+  H: number,
+): void {
+  // Fade para escuro: overlay cresce no primeiro 0.8s (transição do ranking)
+  const darken = easeOutCubic(Math.min(1, t / 0.8))
+  const grad = ctx.createLinearGradient(0, 0, 0, H)
+  grad.addColorStop(0, '#100c18')
+  grad.addColorStop(1, '#07050c')
+  ctx.save()
+  ctx.globalAlpha = darken
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, W, H)
+
+  // Texto entra depois da transição e some suavemente no último 0.6s
+  const fadeIn = easeOutCubic(Math.min(1, Math.max(0, (t - 0.5) / 0.8)))
+  const fadeOut = Math.min(1, Math.max(0, (OUTRO_SECS - t) / 0.6))
+  const a = Math.min(fadeIn, fadeOut)
+  const rise = (1 - fadeIn) * 24
+
+  ctx.globalAlpha = a
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = '#ffffff'
+  ctx.shadowColor = 'rgba(236, 72, 153, 0.5)'
+  ctx.shadowBlur = 28 * a
+  const horizontal = project.format === 'horizontal'
+  ctx.font = `800 ${horizontal ? 56 : 64}px Unbounded, Outfit, sans-serif`
+  ctx.fillText(project.outroText?.trim() || DEFAULT_OUTRO_TEXT, W / 2, H / 2 + rise, W - 160)
+  ctx.shadowBlur = 0
+
+  // Crédito sutil com o nome da música
+  ctx.globalAlpha = a * 0.45
+  ctx.font = '500 30px Outfit, sans-serif'
+  ctx.fillText(
+    [project.artist, project.title].filter(Boolean).join(' — '),
+    W / 2,
+    H / 2 + (horizontal ? 70 : 84) + rise,
+    W - 180,
+  )
+
+  ctx.restore()
+  ctx.globalAlpha = 1
 }
 
 /**

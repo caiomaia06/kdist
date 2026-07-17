@@ -213,6 +213,71 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
                 />
               </div>
 
+              <fieldset className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3">
+                <legend className="px-1 text-xs font-medium text-muted-foreground">
+                  Opções de Vídeo · Cinematic
+                </legend>
+                <label className="flex items-center justify-between gap-3">
+                  <span className="text-sm">
+                    Ativar Intro (3s)
+                    <span className="block text-xs text-muted-foreground">
+                      Título e grupo antes da música começar
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!project.introEnabled}
+                    aria-label="Ativar Intro (3s)"
+                    onClick={() => patch({ introEnabled: !project.introEnabled })}
+                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                      project.introEnabled ? 'bg-primary' : 'bg-secondary'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 size-5 rounded-full bg-background transition-[left] ${
+                        project.introEnabled ? 'left-[22px]' : 'left-0.5'
+                      }`}
+                    />
+                  </button>
+                </label>
+                <label className="flex items-center justify-between gap-3">
+                  <span className="text-sm">
+                    Ativar Outro (3s)
+                    <span className="block text-xs text-muted-foreground">
+                      Tela de encerramento após o ranking
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!project.outroEnabled}
+                    aria-label="Ativar Outro (3s)"
+                    onClick={() => patch({ outroEnabled: !project.outroEnabled })}
+                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                      project.outroEnabled ? 'bg-primary' : 'bg-secondary'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 size-5 rounded-full bg-background transition-[left] ${
+                        project.outroEnabled ? 'left-[22px]' : 'left-0.5'
+                      }`}
+                    />
+                  </button>
+                </label>
+                {project.outroEnabled && (
+                  <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                    Texto de Encerramento
+                    <input
+                      value={project.outroText ?? ''}
+                      onChange={(e) => patch({ outroText: e.target.value })}
+                      placeholder="Thanks for watching!"
+                      className="h-9 rounded-md border border-input bg-transparent px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </label>
+                )}
+              </fieldset>
+
               <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
                 <span className="flex size-14 items-center justify-center rounded-md bg-secondary">
                   <Music className="size-5 text-muted-foreground" />

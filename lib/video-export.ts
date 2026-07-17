@@ -3,8 +3,10 @@ import { loadImage } from './image-utils'
 import {
   buildBackgroundCache,
   drawFrame,
+  drawVideoFrame,
   computeTotals,
   videoDims,
+  videoTiming,
   type MemberRenderState,
 } from './renderer'
 import type { Project } from './types'
@@ -138,6 +140,9 @@ export function startVideoExport(
     if (cancelled) throw new Error('cancelled')
 
     const total = Math.min(duration, audioBuffer.duration)
+    // Máquina de estados: INTRO (opcional) → MAIN/RANKING → OUTRO (opcional).
+    // O vídeo dura totalDur; o áudio sofre delay de introDur para começar.
+    const timing = videoTiming(project, total)
 
     // ---------- 2. Canvas offscreen + cache de fundo ----------
     const canvas = document.createElement('canvas')
@@ -186,7 +191,7 @@ export function startVideoExport(
       drawFrame(ctx, cache, project, avatars, states, totals, (i * 0.2) % Math.max(total, 1), total)
     }
     states.clear()
-    drawFrame(ctx, cache, project, avatars, states, totals, 0, total)
+    drawVideoFrame(ctx, cache, project, avatars, states, totals, 0, total)
 
     // ---------- 4b. Gravação com relógio do AudioContext ----------
     await actx.resume()
@@ -195,33 +200,38 @@ export function startVideoExport(
 
     // Pré-rolagem: o encoder estabiliza gravando o frame inicial parado.
     // A música só começa depois — e esse trecho é cortado na finalização.
-    source.start(t0 + PREROLL)
+    // Com Intro ativa, o áudio sofre delay EXTRA de introDur segundos,
+    // agendado no relógio do AudioContext (sincronia perfeita, sem drift).
+    source.start(t0 + PREROLL + timing.introDur)
     videoTrack.requestFrame()
 
     await new Promise<void>((resolve) => {
       const interval = setInterval(() => {
         try {
           const elapsed = actx.currentTime - t0
-          const t = elapsed - PREROLL // tempo da música (negativo na pré-rolagem)
-          if (cancelled || t >= total) {
+          // Tempo do VÍDEO (negativo na pré-rolagem): inclui intro e outro
+          const vt = elapsed - PREROLL
+          if (cancelled || vt >= timing.totalDur) {
             clearInterval(interval)
             resolve()
             return
           }
-          drawFrame(
+          // Espectro real só na fase MAIN (quando o áudio está tocando)
+          const inMain = vt >= timing.introDur && vt < timing.introDur + total
+          drawVideoFrame(
             ctx,
             cache,
             project,
             avatars,
             states,
             totals,
-            Math.max(0, t),
+            Math.max(0, vt),
             total,
-            t >= 0 ? readFrequency(analyserHandle) : undefined,
+            inMain ? readFrequency(analyserHandle) : undefined,
           )
           videoTrack.requestFrame()
           onFrame?.(canvas)
-          onProgress(Math.min(1, Math.max(0, t) / total))
+          onProgress(Math.min(1, Math.max(0, vt) / timing.totalDur))
         } catch {
           // Um frame com erro nunca derruba a gravação inteira
         }
@@ -246,7 +256,8 @@ export function startVideoExport(
     const rawBlob = new Blob(chunks, { type: mime || 'video/webm' })
     let finalBlob = rawBlob
     try {
-      finalBlob = await finalizeVideo(rawBlob, extension, PREROLL, PREROLL + total)
+      // Corta a pré-rolagem; mantém intro + música + outro (totalDur)
+      finalBlob = await finalizeVideo(rawBlob, extension, PREROLL, PREROLL + timing.totalDur)
     } catch (e) {
       // Se o remux falhar, ainda entrega o vídeo original (reproduzível)
       console.error('Falha ao finalizar metadados do vídeo', e)
