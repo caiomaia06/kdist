@@ -328,4 +328,27 @@ html[data-theme='photocard'] [data-slot='button']:not(:disabled) {
     font-family: var(--font-family-heading);
     text-transform: var(--heading-transform);
   }
+
+  /* ============================================================
+     Micro-interações universais ("Juicy UI")
+     Todo elemento clicável ganha transição de 200ms e o efeito
+     tátil de "afundar" (scale 0.95) ao clicar. :where() mantém a
+     especificidade em zero para overrides pontuais nos componentes.
+     ============================================================ */
+  :where(button, [role='button'], [role='switch'], select, summary, a) {
+    transition-property:
+      color, background-color, border-color, box-shadow, transform, translate,
+      scale, opacity, filter;
+    transition-duration: 200ms;
+    transition-timing-function: ease-in-out;
+  }
+  :where(button, [role='button'], [role='switch'], summary):active:not(:disabled) {
+    scale: 0.95;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, [role='button'], [role='switch'], summary):active:not(:disabled) {
+    scale: 1;
+  }
 }

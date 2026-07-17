@@ -122,10 +122,10 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
                 role="tab"
                 aria-selected={tab === t.id}
                 onClick={() => setTab(t.id)}
-                className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-200 ease-in-out ${
                   tab === t.id
-                    ? 'bg-background text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'
                 }`}
               >
                 {t.label}
@@ -134,7 +134,7 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
           </div>
 
           {tab === 'info' && (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
               <fieldset className="flex flex-col gap-1.5">
                 <legend className="text-xs font-medium text-muted-foreground">
                   Formato do vídeo
@@ -307,20 +307,24 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
           )}
 
           {tab === 'members' && (
-            <MembersPanel
-              members={project.members}
-              groups={groups}
-              onChange={(members: Member[]) => patch({ members })}
-            />
+            <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+              <MembersPanel
+                members={project.members}
+                groups={groups}
+                onChange={(members: Member[]) => patch({ members })}
+              />
+            </div>
           )}
 
           {tab === 'timeline' && (
-            <TimelinePanel
-              members={project.members}
-              segments={project.segments}
-              onChange={(segments: Segment[]) => patch({ segments })}
-              getTime={() => previewRef.current?.getTime() ?? 0}
-            />
+            <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+              <TimelinePanel
+                members={project.members}
+                segments={project.segments}
+                onChange={(segments: Segment[]) => patch({ segments })}
+                getTime={() => previewRef.current?.getTime() ?? 0}
+              />
+            </div>
           )}
         </aside>
       </div>

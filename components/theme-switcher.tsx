@@ -67,7 +67,7 @@ export function ThemeSwitcher() {
         <ul
           role="listbox"
           aria-label="Temas da interface"
-          className="absolute right-0 z-50 mt-1.5 w-64 overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+          className="absolute right-0 z-50 mt-1.5 w-64 origin-top-right overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg animate-in fade-in zoom-in-95 slide-in-from-top-1 duration-200"
         >
           {UI_THEMES.map((t) => (
             <li key={t.id}>

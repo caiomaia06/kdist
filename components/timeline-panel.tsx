@@ -264,9 +264,9 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
                 type="button"
                 onClick={() => toggleMember(m.id)}
                 aria-pressed={active}
-                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all duration-200 ease-in-out hover:-translate-y-0.5 ${
                   active
-                    ? 'border-transparent text-background'
+                    ? 'border-transparent text-background shadow-md'
                     : 'border-border bg-card text-foreground hover:bg-secondary'
                 }`}
                 style={active ? { backgroundColor: m.color } : undefined}
@@ -363,7 +363,7 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
           return (
             <li
               key={s.id}
-              className="flex flex-col gap-1.5 rounded-md border border-border bg-card px-2 py-1.5 text-sm"
+              className="flex flex-col gap-1.5 rounded-md border border-border bg-card px-2 py-1.5 text-sm transition-all duration-200 ease-in-out animate-in fade-in slide-in-from-top-1 hover:border-primary/40 hover:bg-secondary/60"
             >
               <div className="flex items-center gap-2">
                 <span

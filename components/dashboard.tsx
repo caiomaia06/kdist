@@ -84,7 +84,7 @@ export function Dashboard({
       </header>
 
       {creating ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 animate-in fade-in zoom-in-95 duration-200">
           <h2 className="text-sm font-semibold">Novo projeto</h2>
           <input
             autoFocus
@@ -137,7 +137,7 @@ export function Dashboard({
       <ul className="grid gap-4 sm:grid-cols-2">
         {projects.map((p) => (
           <li key={p.id}>
-            <div className="group flex items-center gap-4 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/50">
+            <div className="group flex items-center gap-4 rounded-xl border border-border bg-card p-4 transition-all duration-200 ease-in-out animate-in fade-in zoom-in-95 hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-lg active:scale-[0.98]">
               <button
                 type="button"
                 onClick={() => onOpen(p)}
