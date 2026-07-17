@@ -90,6 +90,7 @@ export interface MemberRenderState {
   y: number
   barW: number
   glow: number
+  adlibGlow: number // fade da bolha secundária de ad-lib (vocal de apoio)
   scale: number // câmera dinâmica: zoom suave do avatar (Ken Burns)
   initialized: boolean
 }
@@ -219,8 +220,19 @@ export function computeTotals(project: Project): Map<string, number> {
 function isActive(project: Project, memberId: string, t: number): boolean {
   // Fim estritamente exclusivo (t < endTime): se A termina em 5.0s e B começa
   // em 5.0s, no instante 5.0 só B está ativo — sem colisão de milissegundos.
+  // Ad-libs NÃO contam aqui: eles têm área visual própria (drawAdlibBubble).
   return project.segments.some(
-    (s) => s.memberId === memberId && t >= s.startTime && t < s.endTime,
+    (s) => !s.isAdlib && s.memberId === memberId && t >= s.startTime && t < s.endTime,
+  )
+}
+
+/** Ativo APENAS como ad-lib (vocal de apoio) no instante t. */
+function isAdlibActive(project: Project, memberId: string, t: number): boolean {
+  return (
+    !isActive(project, memberId, t) &&
+    project.segments.some(
+      (s) => s.isAdlib === true && s.memberId === memberId && t >= s.startTime && t < s.endTime,
+    )
   )
 }
 
@@ -484,12 +496,14 @@ export function drawFrame(
     const targetY = startY + targetRank * rowH + rowH / 2
     const targetW = ((sung.get(m.id) ?? 0) / absoluteMax) * maxBarW
     const active = isActive(project, m.id, t)
+    const adlib = isAdlibActive(project, m.id, t)
 
     if (!st || !st.initialized) {
       st = {
         y: targetY,
         barW: targetW,
         glow: active ? 1 : 0,
+        adlibGlow: adlib ? 1 : 0,
         scale: active ? ACTIVE_SCALE : INACTIVE_SCALE,
         initialized: true,
       }
@@ -500,13 +514,15 @@ export function drawFrame(
     st.y = lerp(st.y, targetY, 0.12)
     st.barW = lerp(st.barW, targetW, 0.18)
     st.glow = lerp(st.glow, active ? 1 : 0, 0.14)
+    st.adlibGlow = lerp(st.adlibGlow ?? 0, adlib ? 1 : 0, 0.14)
     st.scale = lerp(st.scale, active ? ACTIVE_SCALE : INACTIVE_SCALE, 0.1)
 
     const cy = st.y
     const glow = st.glow
     // "Saiu do chat": última linha já cantada → escurece para 40%
     const left = hasLeftChat(lastEnd, m.id, t)
-    const alpha = left ? 0.4 : 0.35 + 0.65 * glow
+    // Ad-lib dá um realce parcial na lista (sem roubar o foco do principal)
+    const alpha = left ? 0.4 : 0.35 + 0.65 * Math.max(glow, st.adlibGlow * 0.55)
     const ringColor = left ? desaturateColor(m.color) : m.color
 
     ctx.globalAlpha = alpha
@@ -578,7 +594,96 @@ export function drawFrame(
   }
 
   drawVoiceBubble(ctx, project, avatars, states, topY, t, W)
+  drawAdlibBubble(ctx, project, avatars, states, W)
   drawLeftChatToasts(ctx, project, lastEnd, avatars, t, W)
+}
+
+/**
+ * "Lugarzinho" do Ad-lib: card compacto flutuando no canto superior direito,
+ * separado do 'Cantando Agora' principal. Avatares em escala reduzida (~0.65
+ * do tamanho da bolha principal), nota musical ao lado e opacidade máxima de
+ * 80% — deixa claro que é vocal de apoio, sem roubar o foco do cantor líder.
+ */
+function drawAdlibBubble(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  avatars: Map<string, HTMLImageElement>,
+  states: Map<string, MemberRenderState>,
+  W: number,
+): void {
+  const singers = project.members.filter((m) => (states.get(m.id)?.adlibGlow ?? 0) > 0.05)
+  if (singers.length === 0) return
+
+  // Fade/pop pelo adlibGlow (já suavizado por lerp) — teto de 80% de opacidade
+  const g = Math.min(1, Math.max(...singers.map((m) => states.get(m.id)!.adlibGlow)))
+  const a = g * 0.8
+  const scale = 0.9 + 0.1 * g
+
+  // Escala reduzida: avatar ~0.65 do raio da bolha principal (52 → 34)
+  const r = 34
+  const overlap = r * 0.75
+  const avatarsW = r * 2 + (singers.length - 1) * overlap
+  const names = singers.map((m) => m.name).join(' + ')
+  ctx.font = '700 24px Outfit, sans-serif'
+  const namesW = Math.min(ctx.measureText(names).width, 300)
+  ctx.font = '700 15px Outfit, sans-serif'
+  const labelW = ctx.measureText('AD-LIB ♪').width
+  const textAreaW = Math.max(namesW, labelW)
+  const padX = 22
+  const gap = 16
+  const cardH = 92
+  const cardW = padX + avatarsW + gap + textAreaW + padX
+  const mainColor = singers[0].color
+
+  // Ancorado no canto superior direito, abaixo do cabeçalho
+  const headerEndY = headerLayout(project).headerEndY
+  const cx = W - 60 - cardW / 2
+  const cy = headerEndY + 24
+
+  ctx.save()
+  ctx.globalAlpha = a
+  ctx.translate(cx, cy)
+  ctx.scale(scale, scale)
+  const x0 = -cardW / 2
+
+  // Card glass discreto (menos brilho que a bolha principal)
+  ctx.shadowColor = mainColor
+  ctx.shadowBlur = 16 * g
+  ctx.fillStyle = 'rgba(22, 17, 34, 0.5)'
+  ctx.beginPath()
+  ctx.roundRect(x0, -cardH / 2, cardW, cardH, cardH / 2)
+  ctx.fill()
+  ctx.shadowBlur = 0
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.roundRect(x0, -cardH / 2, cardW, cardH, cardH / 2)
+  ctx.stroke()
+
+  // Avatares reduzidos empilhados
+  for (let i = singers.length - 1; i >= 0; i--) {
+    const m = singers[i]
+    const acx = x0 + padX + r + i * overlap
+    ctx.fillStyle = m.color
+    ctx.beginPath()
+    ctx.arc(acx, 0, r + 3, 0, Math.PI * 2)
+    ctx.fill()
+    drawAvatar(ctx, avatars.get(m.id), m.name, acx, 0, r)
+  }
+
+  // Rótulo com nota musical + nomes
+  const textX = x0 + padX + avatarsW + gap
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = mainColor
+  ctx.font = '700 15px Outfit, sans-serif'
+  ctx.fillText('AD-LIB ♪', textX, -20)
+  ctx.fillStyle = 'rgba(255,255,255,0.92)'
+  ctx.font = '700 24px Outfit, sans-serif'
+  ctx.fillText(names, textX, 10, textAreaW)
+  ctx.textBaseline = 'alphabetic'
+  ctx.restore()
+  ctx.globalAlpha = 1
 }
 
 function drawAvatar(
@@ -631,9 +736,10 @@ function activeLyricLayers(project: Project, t: number): {
   romanized: string
   translation: string
 } {
-  // Mesmo critério do isActive: fim estritamente exclusivo (t < endTime)
+  // Mesmo critério do isActive: fim estritamente exclusivo (t < endTime).
+  // Ad-libs ficam fora das letras principais (são vocais de apoio).
   const active = project.segments.filter(
-    (s) => t >= s.startTime && t < s.endTime,
+    (s) => !s.isAdlib && t >= s.startTime && t < s.endTime,
   )
   const uniq = (vals: (string | undefined)[]) => [...new Set(vals.map((v) => v?.trim()).filter(Boolean))] as string[]
   return {

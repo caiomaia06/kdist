@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { CircleDot, Keyboard, Languages, Loader2, MicVocal, Plus, Trash2 } from 'lucide-react'
+import { CircleDot, Keyboard, Languages, Loader2, MicVocal, Music, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { uid, type Member, type Segment } from '@/lib/types'
 
@@ -374,6 +374,21 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
                 <span className="min-w-0 flex-1 truncate font-medium">
                   {m?.name ?? 'Membro removido'}
                 </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!!s.isAdlib}
+                  onClick={() => updateSegment(s.id, { isAdlib: !s.isAdlib || undefined })}
+                  title="Ad-lib: vocal de apoio, aparece em área secundária no vídeo"
+                  className={`flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors ${
+                    s.isAdlib
+                      ? 'border-primary bg-primary/20 text-primary'
+                      : 'border-border text-muted-foreground hover:bg-secondary'
+                  }`}
+                >
+                  <Music className="size-3" aria-hidden="true" />
+                  Ad-lib
+                </button>
                 <input
                   type="number"
                   min={0}

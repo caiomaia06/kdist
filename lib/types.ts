@@ -14,6 +14,7 @@ export interface Segment {
   lyricHangul?: string // letra original em Hangul
   lyricRomanized?: string // romanização
   lyricTranslation?: string // tradução
+  isAdlib?: boolean // vocal de apoio: não ocupa o 'Cantando Agora' principal
 }
 
 export type VideoFormat = 'vertical' | 'horizontal'
