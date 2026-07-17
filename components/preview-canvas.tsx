@@ -20,8 +20,9 @@ import { loadImage } from '@/lib/image-utils'
 import {
   buildBackgroundCache,
   computeTotals,
-  drawFrame,
+  drawVideoFrame,
   videoDims,
+  videoTiming,
   type MemberRenderState,
 } from '@/lib/renderer'
 import { downloadVideo, startVideoExport, type ExportController } from '@/lib/video-export'
@@ -60,6 +61,13 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
     const [exporting, setExporting] = useState(false)
     const [exportProgress, setExportProgress] = useState(0)
 
+    // Máquina de estados do relógio de VÍDEO:
+    // 'intro'/'ranking'/'outro' rodam num relógio próprio (performance.now);
+    // 'main' usa o currentTime do áudio como fonte única de verdade (zero drift).
+    const phaseRef = useRef<'intro' | 'main' | 'ranking' | 'outro'>('main')
+    const phaseStartRef = useRef(0) // performance.now (ms) do início da fase
+    const videoTimeRef = useRef(0) // tempo de vídeo atual (inclui intro/outro)
+
     const totals = useMemo(() => computeTotals(project), [project])
     const projectRef = useRef(project)
     projectRef.current = project
@@ -68,32 +76,68 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
     const durationRef = useRef(duration)
     durationRef.current = duration
 
+    // Duração total do vídeo = áudio + intro (3s) + outro (3s), se ativos
+    const timing = videoTiming(project, duration)
+
     const dims = videoDims(project.format)
 
     useImperativeHandle(ref, () => ({
       getTime: () => audioRef.current?.currentTime ?? 0,
     }))
 
-    const renderAt = useCallback((t: number) => {
+    // Renderiza no tempo de VÍDEO vt (intro/outro inclusos na linha do tempo)
+    const renderAt = useCallback((vt: number) => {
       const canvas = canvasRef.current
       const cache = cacheRef.current
       if (!canvas || !cache) return
       const ctx = canvas.getContext('2d')
       if (!ctx) return
-      drawFrame(
+      drawVideoFrame(
         ctx,
         cache,
         projectRef.current,
         avatarsRef.current,
         statesRef.current,
         totalsRef.current,
-        t,
-        durationRef.current || undefined,
-        // Espectro em tempo real (só existe depois do primeiro Play)
-        analyserRef.current && playingRef.current
+        vt,
+        durationRef.current || 0,
+        // Espectro em tempo real: só na fase MAIN com áudio tocando
+        analyserRef.current && playingRef.current && phaseRef.current === 'main'
           ? readFrequency(analyserRef.current)
           : undefined,
       )
+    }, [])
+
+    /**
+     * Sincroniza a máquina de estados + o áudio para um tempo de vídeo vt.
+     * Se `play` for true, retoma a reprodução a partir dali.
+     */
+    const syncToVideoTime = useCallback((vt: number, play: boolean) => {
+      const audio = audioRef.current
+      if (!audio) return
+      const t = videoTiming(projectRef.current, durationRef.current)
+      videoTimeRef.current = vt
+
+      if (vt < t.introDur) {
+        phaseRef.current = 'intro'
+        phaseStartRef.current = performance.now() - vt * 1000
+        audio.pause() // o áudio só entra quando a intro terminar
+        audio.currentTime = 0
+      } else if (vt < t.introDur + t.mainDur) {
+        phaseRef.current = 'main'
+        audio.currentTime = vt - t.introDur
+        if (play) void audio.play()
+        else audio.pause()
+      } else if (vt < t.introDur + t.mainDur + t.rankingDur) {
+        phaseRef.current = 'ranking'
+        phaseStartRef.current = performance.now() - (vt - t.introDur - t.mainDur) * 1000
+        audio.pause()
+      } else {
+        phaseRef.current = 'outro'
+        phaseStartRef.current =
+          performance.now() - (vt - t.introDur - t.mainDur - t.rankingDur) * 1000
+        audio.pause()
+      }
     }, [])
 
     // (Re)constrói o cache de fundo e os avatares quando o projeto muda
@@ -117,7 +161,7 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         avatarsRef.current = map
         // Parado: limpa os estados de lerp para as posições irem direto ao alvo
         if (!playingRef.current) statesRef.current.clear()
-        renderAt(audioRef.current?.currentTime ?? 0)
+        renderAt(videoTimeRef.current)
       }
       void build()
       return () => {
@@ -125,17 +169,74 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
       }
     }, [project, renderAt])
 
-    // Loop de preview (rAF) — atualização de UI com throttle
+    // Loop de preview (rAF) — máquina de estados INTRO → MAIN → RANKING → OUTRO.
+    // A UI é atualizada com throttle; o tempo de VÍDEO é a linha do tempo.
     useEffect(() => {
       if (!playing || exporting) return
       let lastUi = 0
       const loop = () => {
-        const t = audioRef.current?.currentTime ?? 0
-        renderAt(t)
+        const audio = audioRef.current
+        const t = videoTiming(projectRef.current, durationRef.current)
+        let vt = videoTimeRef.current
+
+        if (phaseRef.current === 'intro') {
+          vt = (performance.now() - phaseStartRef.current) / 1000
+          if (vt >= t.introDur) {
+            // Intro acabou: o áudio começa a tocar AGORA (delay de 3s cumprido)
+            phaseRef.current = 'main'
+            if (audio) {
+              audio.currentTime = 0
+              void audio.play()
+            }
+            vt = t.introDur
+          }
+        } else if (phaseRef.current === 'main') {
+          // O currentTime do áudio é a única fonte de verdade — zero drift
+          vt = t.introDur + (audio?.currentTime ?? 0)
+          if (vt >= t.introDur + t.mainDur - 0.02) {
+            // MAIN terminou (áudio acabou ou silêncio final cortado):
+            // entra a fase RANKING de 5s com relógio próprio
+            phaseRef.current = 'ranking'
+            phaseStartRef.current = performance.now()
+            audio?.pause()
+            vt = t.introDur + t.mainDur
+          }
+        } else if (phaseRef.current === 'ranking') {
+          vt = t.introDur + t.mainDur + (performance.now() - phaseStartRef.current) / 1000
+          if (vt >= t.introDur + t.mainDur + t.rankingDur) {
+            if (t.outroDur > 0) {
+              phaseRef.current = 'outro'
+              phaseStartRef.current = performance.now()
+              vt = t.introDur + t.mainDur + t.rankingDur
+            } else {
+              videoTimeRef.current = t.totalDur
+              renderAt(t.totalDur)
+              setTime(t.totalDur)
+              playingRef.current = false
+              setPlaying(false)
+              return
+            }
+          }
+        } else {
+          // outro: relógio próprio após o ranking
+          vt =
+            t.introDur + t.mainDur + t.rankingDur + (performance.now() - phaseStartRef.current) / 1000
+          if (vt >= t.totalDur) {
+            videoTimeRef.current = t.totalDur
+            renderAt(t.totalDur)
+            setTime(t.totalDur)
+            playingRef.current = false
+            setPlaying(false)
+            return
+          }
+        }
+
+        videoTimeRef.current = vt
+        renderAt(vt)
         const now = performance.now()
         if (now - lastUi > 250) {
           lastUi = now
-          setTime(t)
+          setTime(vt)
         }
         rafRef.current = requestAnimationFrame(loop)
       }
@@ -157,19 +258,22 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         } catch {
           analyserRef.current = null // visualizador é opcional, áudio segue normal
         }
-        void audio.play()
+        // No fim do vídeo, o Play recomeça do zero (incluindo a intro)
+        const t = videoTiming(projectRef.current, durationRef.current)
+        const vt = videoTimeRef.current >= t.totalDur - 0.05 ? 0 : videoTimeRef.current
+        syncToVideoTime(vt, true)
         playingRef.current = true
         setPlaying(true)
       }
     }
 
-    const seek = (t: number) => {
+    const seek = (vt: number) => {
       const audio = audioRef.current
       if (!audio) return
-      audio.currentTime = t
-      setTime(t)
+      syncToVideoTime(vt, playingRef.current)
+      setTime(vt)
       statesRef.current.clear()
-      renderAt(t)
+      renderAt(vt)
     }
 
     // ---------- Exportação (motor isolado em lib/video-export.ts) ----------
@@ -221,7 +325,7 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         setExporting(false)
         setExportProgress(0)
         statesRef.current.clear()
-        renderAt(audioRef.current?.currentTime ?? 0)
+        renderAt(videoTimeRef.current)
       }
     }
 
@@ -237,10 +341,10 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
     const canPlay = Boolean(audioUrl)
 
     return (
-      <div className="flex h-full w-full min-w-0 flex-col items-center gap-3">
+      <div className="flex h-full w-full min-w-0 flex-col items-center gap-2 md:gap-3">
         <div
-          className={`relative mx-auto flex min-h-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-black ${
-            project.format === 'horizontal' ? 'w-full' : 'flex-1'
+          className={`relative mx-auto flex min-h-0 max-w-full items-center justify-center overflow-hidden rounded-xl border border-border bg-black ${
+            project.format === 'horizontal' ? 'w-full flex-1 md:flex-none' : 'flex-1'
           }`}
         >
           <canvas
@@ -248,7 +352,11 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
             ref={canvasRef}
             width={dims.W}
             height={dims.H}
-            className={project.format === 'horizontal' ? 'h-auto max-h-full w-full' : 'h-full w-auto'}
+            className={
+              project.format === 'horizontal'
+                ? 'h-auto max-h-full w-full max-w-full'
+                : 'h-full w-auto max-w-full object-contain'
+            }
             style={{ aspectRatio: project.format === 'horizontal' ? '16 / 9' : '9 / 16' }}
             aria-label="Pré-visualização do vídeo de line distribution"
           />
@@ -285,13 +393,18 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
           src={audioUrl ?? undefined}
           onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
           onEnded={() => {
+            // Áudio acabou: se ainda estamos em MAIN, o loop rAF fará a
+            // transição para RANKING (currentTime fica travado no fim).
+            // Se há ranking ou outro pela frente, o vídeo continua sozinho.
+            const t = videoTiming(projectRef.current, durationRef.current)
+            if (playingRef.current && (t.rankingDur > 0 || t.outroDur > 0)) return
             playingRef.current = false
             setPlaying(false)
           }}
           crossOrigin="anonymous"
         />
 
-        <div className="flex w-full max-w-xl items-center gap-3">
+        <div className="flex w-full max-w-xl items-center gap-2 md:gap-3">
           <Button
             size="icon"
             variant="secondary"
@@ -301,26 +414,30 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
           >
             {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
           </Button>
-          <span className="w-12 text-right font-mono text-xs text-muted-foreground">
+          <span className="w-10 text-right font-mono text-xs text-muted-foreground md:w-12">
             {formatTime(time)}
           </span>
           <input
             type="range"
             min={0}
-            max={duration || 1}
+            max={timing.totalDur || 1}
             step={0.05}
-            value={Math.min(time, duration || 1)}
+            value={Math.min(time, timing.totalDur || 1)}
             onChange={(e) => seek(Number(e.target.value))}
             disabled={!canPlay || exporting}
             className="min-w-0 flex-1 accent-primary"
-            aria-label="Posição do áudio"
+            aria-label="Posição do vídeo"
           />
-          <span className="w-12 font-mono text-xs text-muted-foreground">
-            {formatTime(duration)}
+          <span className="w-10 font-mono text-xs text-muted-foreground md:w-12">
+            {formatTime(timing.totalDur)}
           </span>
-          <Button onClick={startExport} disabled={!canPlay || exporting || !duration}>
+          <Button
+            onClick={startExport}
+            disabled={!canPlay || exporting || !duration}
+            aria-label="Exportar vídeo"
+          >
             <Download className="size-4" />
-            Exportar
+            <span className="hidden md:inline-block">Exportar</span>
           </Button>
         </div>
       </div>

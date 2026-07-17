@@ -43,11 +43,17 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
-  --font-sans: 'Outfit', 'Outfit Fallback', sans-serif;
+  --font-sans: var(--font-family-base);
 }
 
 :root {
   color-scheme: light;
+  /* --- Variáveis do sistema de Temas de Interface (UI Themes) --- */
+  --font-family-base: 'Outfit', 'Outfit Fallback', sans-serif;
+  --font-family-heading: inherit;
+  --heading-transform: none;
+  --card-shadow: none;
+  --btn-glow: none;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -118,7 +124,9 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not(.light) {
+  /* :where() zera a especificidade para os Temas de Interface
+     (html[data-theme='...']) SEMPRE vencerem este fallback do SO */
+  :where(:root:not(.light)) {
     color-scheme: dark;
     --background: oklch(0.15 0.015 290);
     --foreground: oklch(0.97 0.005 300);
@@ -154,11 +162,193 @@
   }
 }
 
+/* ============================================================
+   Temas de Interface (UI Themes) — cultura K-pop
+   O data-theme no <html> redefine os tokens semânticos que TODOS
+   os componentes já usam. A troca é instantânea, sem re-render.
+   (Estes blocos vêm DEPOIS de .dark/media queries para vencer
+   na cascata com a mesma especificidade.)
+   ============================================================ */
+
+/* --- theme-concert (Concert Neon · padrão): show ao vivo, noturno --- */
+html[data-theme='concert'][data-theme] {
+  color-scheme: dark;
+  --background: oklch(0.15 0.02 285);
+  --foreground: oklch(0.97 0.005 300);
+  --card: oklch(0.19 0.025 285);
+  --card-foreground: oklch(0.97 0.005 300);
+  --popover: oklch(0.19 0.025 285);
+  --popover-foreground: oklch(0.97 0.005 300);
+  --primary: oklch(0.68 0.23 350);
+  --primary-foreground: oklch(0.98 0.01 350);
+  --secondary: oklch(0.25 0.025 285);
+  --secondary-foreground: oklch(0.97 0.005 300);
+  --muted: oklch(0.25 0.025 285);
+  --muted-foreground: oklch(0.72 0.015 300);
+  --accent: oklch(0.27 0.04 300);
+  --accent-foreground: oklch(0.97 0.005 300);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 14%);
+  --input: oklch(1 0 0 / 18%);
+  --ring: oklch(0.68 0.23 350);
+  --radius: 0.75rem;
+  --font-family-heading: inherit;
+  --heading-transform: none;
+  --card-shadow: none;
+  --btn-glow: 0 0 15px oklch(0.68 0.23 350 / 0.55);
+}
+
+/* --- theme-photocard (Idol Photocard): fofo, soft, físico --- */
+html[data-theme='photocard'][data-theme] {
+  color-scheme: light;
+  --background: oklch(0.972 0.012 85);
+  --foreground: oklch(0.34 0.035 330);
+  --card: oklch(0.995 0.006 85);
+  --card-foreground: oklch(0.34 0.035 330);
+  --popover: oklch(0.995 0.006 85);
+  --popover-foreground: oklch(0.34 0.035 330);
+  --primary: oklch(0.78 0.1 350);
+  --primary-foreground: oklch(0.28 0.07 350);
+  --secondary: oklch(0.93 0.02 90);
+  --secondary-foreground: oklch(0.38 0.04 330);
+  --muted: oklch(0.93 0.02 90);
+  --muted-foreground: oklch(0.55 0.03 330);
+  --accent: oklch(0.9 0.045 200);
+  --accent-foreground: oklch(0.3 0.05 230);
+  --destructive: oklch(0.6 0.2 25);
+  --border: oklch(0.885 0.02 85);
+  --input: oklch(0.885 0.02 85);
+  --ring: oklch(0.78 0.1 350);
+  --radius: 1.5rem;
+  --font-family-heading: var(--font-playfair), Georgia, serif;
+  --heading-transform: none;
+  --card-shadow: 0 8px 24px oklch(0.6 0.06 350 / 0.14), 0 2px 6px oklch(0.5 0.04 330 / 0.08);
+  --btn-glow: none;
+}
+
+/* --- theme-studio (Studio Minimal): escala de cinza, flat, brutalista --- */
+html[data-theme='studio'][data-theme] {
+  color-scheme: dark;
+  --background: oklch(0.22 0 0);
+  --foreground: oklch(0.95 0 0);
+  --card: oklch(0.26 0 0);
+  --card-foreground: oklch(0.95 0 0);
+  --popover: oklch(0.26 0 0);
+  --popover-foreground: oklch(0.95 0 0);
+  --primary: oklch(0.88 0 0);
+  --primary-foreground: oklch(0.18 0 0);
+  --secondary: oklch(0.31 0 0);
+  --secondary-foreground: oklch(0.95 0 0);
+  --muted: oklch(0.31 0 0);
+  --muted-foreground: oklch(0.68 0 0);
+  --accent: oklch(0.34 0 0);
+  --accent-foreground: oklch(0.95 0 0);
+  --destructive: oklch(0.65 0.18 25);
+  --border: oklch(1 0 0 / 14%);
+  --input: oklch(1 0 0 / 18%);
+  --ring: oklch(0.7 0 0);
+  --radius: 0.375rem;
+  --font-family-base:
+    Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-family-heading: inherit;
+  --heading-transform: none;
+  --card-shadow: none;
+  --btn-glow: none;
+}
+
+/* --- theme-comeback (Comeback Poster): editorial, alto contraste --- */
+html[data-theme='comeback'][data-theme] {
+  color-scheme: light;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.12 0 0);
+  --card: oklch(0.98 0 0);
+  --card-foreground: oklch(0.12 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.12 0 0);
+  --primary: oklch(0.55 0.23 27);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.94 0 0);
+  --secondary-foreground: oklch(0.12 0 0);
+  --muted: oklch(0.94 0 0);
+  --muted-foreground: oklch(0.42 0 0);
+  --accent: oklch(0.45 0.19 265);
+  --accent-foreground: oklch(0.99 0 0);
+  --destructive: oklch(0.55 0.23 27);
+  --border: oklch(0.15 0 0);
+  --input: oklch(0.15 0 0);
+  --ring: oklch(0.45 0.19 265);
+  --radius: 0rem;
+  --font-family-heading: var(--font-archivo-black), Impact, sans-serif;
+  --heading-transform: uppercase;
+  --card-shadow: none;
+  --btn-glow: none;
+}
+
+/* Efeitos por tema aplicados via seletores globais */
+html[data-theme='concert'] .bg-primary {
+  /* Gradiente neon rosa → roxo → ciano nos botões/elementos primários */
+  background-image: linear-gradient(135deg, oklch(0.68 0.23 350), oklch(0.6 0.22 300) 55%, oklch(0.75 0.15 200));
+}
+html[data-theme='concert'] [data-slot='button']:not(:disabled):hover,
+html[data-theme='concert'] [aria-pressed='true'],
+html[data-theme='concert'] [role='tab'][aria-selected='true'] {
+  box-shadow: var(--btn-glow);
+}
+html[data-theme='photocard'] .bg-card,
+html[data-theme='photocard'] [data-slot='button']:not(:disabled) {
+  box-shadow: var(--card-shadow);
+}
+
+/* Bolinhas de preview no seletor de temas */
+.theme-dot-concert {
+  background: linear-gradient(135deg, #ec4899, #8b5cf6 55%, #06b6d4);
+}
+.theme-dot-photocard {
+  background: oklch(0.9 0.06 350);
+}
+.theme-dot-studio {
+  background: oklch(0.4 0 0);
+}
+.theme-dot-comeback {
+  background: linear-gradient(90deg, oklch(0.55 0.23 27) 50%, oklch(0.45 0.19 265) 50%);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* Tipografia temável: títulos e legendas seguem o tema ativo */
+  h1,
+  h2,
+  h3,
+  legend {
+    font-family: var(--font-family-heading);
+    text-transform: var(--heading-transform);
+  }
+
+  /* ============================================================
+     Micro-interações universais ("Juicy UI")
+     Todo elemento clicável ganha transição de 200ms e o efeito
+     tátil de "afundar" (scale 0.95) ao clicar. :where() mantém a
+     especificidade em zero para overrides pontuais nos componentes.
+     ============================================================ */
+  :where(button, [role='button'], [role='switch'], select, summary, a) {
+    transition-property:
+      color, background-color, border-color, box-shadow, transform, translate,
+      scale, opacity, filter;
+    transition-duration: 200ms;
+    transition-timing-function: ease-in-out;
+  }
+  :where(button, [role='button'], [role='switch'], summary):active:not(:disabled) {
+    scale: 0.95;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, [role='button'], [role='switch'], summary):active:not(:disabled) {
+    scale: 1;
   }
 }

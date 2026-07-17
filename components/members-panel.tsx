@@ -112,7 +112,7 @@ export function MembersPanel({ members, groups = [], onChange }: MembersPanelPro
         {members.map((m) => (
           <li
             key={m.id}
-            className="flex items-center gap-3 rounded-lg border border-border bg-card p-2"
+            className="flex items-center gap-3 rounded-lg border border-border bg-card p-2 transition-all duration-200 ease-in-out animate-in fade-in slide-in-from-top-1 hover:border-primary/40"
           >
             <button
               type="button"

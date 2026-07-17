@@ -58,7 +58,7 @@ export function GroupsSection({ groups, onUpsert, onDelete }: GroupsSectionProps
       </div>
 
       {editing !== null && (
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 animate-in fade-in zoom-in-95 duration-200">
           <h3 className="text-sm font-semibold">
             {editing === 'new' ? 'Novo grupo' : `Editando ${editing.name}`}
           </h3>
@@ -93,7 +93,7 @@ export function GroupsSection({ groups, onUpsert, onDelete }: GroupsSectionProps
           {groups.map((g) => (
             <li
               key={g.id}
-              className="flex items-center gap-3 rounded-xl border border-border bg-card p-4"
+              className="flex items-center gap-3 rounded-xl border border-border bg-card p-4 transition-all duration-200 ease-in-out animate-in fade-in zoom-in-95 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg"
             >
               <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                 <span className="truncate font-semibold">{g.name}</span>

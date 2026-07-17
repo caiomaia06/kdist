@@ -20,6 +20,67 @@ export function videoDims(format?: VideoFormat): { W: number; H: number } {
 /** Duração da tela de Ranking Final no fim do áudio (segundos). */
 export const FINAL_RANKING_SECS = 5
 
+/** Duração das telas cinematográficas de entrada e saída (segundos). */
+export const INTRO_SECS = 3
+export const OUTRO_SECS = 3
+export const DEFAULT_OUTRO_TEXT = 'Thanks for watching!'
+
+/** Estados da máquina de renderização do vídeo. */
+export type VideoState = 'INTRO' | 'MAIN' | 'RANKING' | 'OUTRO'
+
+/** Silêncio máximo tolerado após a última linha antes de cortar o MAIN. */
+export const MAX_TRAILING_SILENCE_SECS = 4
+
+export interface VideoTiming {
+  introDur: number // 0 ou INTRO_SECS
+  mainDur: number // fase MAIN (música); pode ser < audioDur se houver silêncio longo
+  rankingDur: number // fase RANKING dedicada (FINAL_RANKING_SECS se houver membros)
+  outroDur: number // 0 ou OUTRO_SECS
+  audioDur: number // duração real do áudio
+  totalDur: number // duração total do vídeo exportado
+}
+
+/**
+ * Linha do tempo do VÍDEO (não do áudio):
+ *   [INTRO] [MAIN] [RANKING 5s] [OUTRO]
+ * O áudio sofre delay de introDur. O MAIN roda até o áudio acabar — ou, se
+ * houver muito silêncio no fim da música, até MAX_TRAILING_SILENCE_SECS
+ * depois da última linha cantada (o silêncio excedente vira RANKING).
+ */
+export function videoTiming(project: Project, audioDur: number): VideoTiming {
+  const introDur = project.introEnabled ? INTRO_SECS : 0
+  const outroDur = project.outroEnabled ? OUTRO_SECS : 0
+  const lastSegmentEnd = project.segments.reduce((acc, s) => Math.max(acc, s.endTime), 0)
+  const mainDur =
+    lastSegmentEnd > 0
+      ? Math.min(audioDur, lastSegmentEnd + MAX_TRAILING_SILENCE_SECS)
+      : audioDur
+  const rankingDur = project.members.length > 0 ? FINAL_RANKING_SECS : 0
+  return {
+    introDur,
+    mainDur,
+    rankingDur,
+    outroDur,
+    audioDur,
+    totalDur: introDur + mainDur + rankingDur + outroDur,
+  }
+}
+
+/** Estado atual da máquina para um tempo de VÍDEO vt. */
+export function videoStateAt(project: Project, vt: number, audioDur: number): VideoState {
+  const { introDur, mainDur, rankingDur } = videoTiming(project, audioDur)
+  if (vt < introDur) return 'INTRO'
+  if (vt < introDur + mainDur) return 'MAIN'
+  if (vt < introDur + mainDur + rankingDur) return 'RANKING'
+  return 'OUTRO'
+}
+
+/** Converte tempo de vídeo → tempo de áudio (clampado à fase MAIN). */
+export function videoToAudioTime(project: Project, vt: number, audioDur: number): number {
+  const { introDur, mainDur } = videoTiming(project, audioDur)
+  return Math.max(0, Math.min(mainDur, vt - introDur))
+}
+
 export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
@@ -29,8 +90,14 @@ export interface MemberRenderState {
   y: number
   barW: number
   glow: number
+  adlibGlow: number // fade da bolha secundária de ad-lib (vocal de apoio)
+  scale: number // câmera dinâmica: zoom suave do avatar (Ken Burns)
   initialized: boolean
 }
+
+/** Escalas-alvo da câmera dinâmica nos avatares. */
+const ACTIVE_SCALE = 1.15 // membro cantando: 15% de zoom
+const INACTIVE_SCALE = 0.95 // inativos recuam para dar profundidade
 
 // ---------- Layout do cabeçalho por formato ----------
 
@@ -48,9 +115,10 @@ function headerLayout(project: Project): HeaderLayout {
   const horizontal = project.format === 'horizontal'
   const hasCover = !!project.coverImage
   if (horizontal) {
+    // 16:9: header ~25% maior para ocupar melhor a largura do palco
     return hasCover
-      ? { coverSize: 110, coverCy: 100, labelY: 192, titleY: 252, artistY: 302, headerEndY: 315, titleFont: 54 }
-      : { coverSize: 0, coverCy: 0, labelY: 84, titleY: 152, artistY: 206, headerEndY: 220, titleFont: 54 }
+      ? { coverSize: 140, coverCy: 112, labelY: 232, titleY: 300, artistY: 356, headerEndY: 372, titleFont: 68 }
+      : { coverSize: 0, coverCy: 0, labelY: 104, titleY: 188, artistY: 248, headerEndY: 264, titleFont: 68 }
   }
   return hasCover
     ? { coverSize: 140, coverCy: 190, labelY: 320, titleY: 400, artistY: 460, headerEndY: 470, titleFont: 68 }
@@ -67,7 +135,11 @@ function hasAnyLyric(project: Project): boolean {
 function barsTop(project: Project): number {
   const lyrics = hasAnyLyric(project)
   if (project.format === 'horizontal') {
-    return headerLayout(project).headerEndY + (lyrics ? 400 : 260)
+    // 16:9: o bloco de barras vive na metade inferior da tela (H=1080).
+    // Garante espaço para a bolha 'Cantando Agora' (agora maior e mais
+    // central) + letras, e elimina o buraco vazio no meio do frame.
+    const minTop = headerLayout(project).headerEndY + (lyrics ? 330 : 200)
+    return Math.max(minTop, 560)
   }
   return project.coverImage ? (lyrics ? 790 : 700) : (lyrics ? 670 : 580)
 }
@@ -151,8 +223,21 @@ export function computeTotals(project: Project): Map<string, number> {
 }
 
 function isActive(project: Project, memberId: string, t: number): boolean {
+  // Fim estritamente exclusivo (t < endTime): se A termina em 5.0s e B começa
+  // em 5.0s, no instante 5.0 só B está ativo — sem colisão de milissegundos.
+  // Ad-libs NÃO contam aqui: eles têm área visual própria (drawAdlibBubble).
   return project.segments.some(
-    (s) => s.memberId === memberId && t >= s.startTime && t <= s.endTime,
+    (s) => !s.isAdlib && s.memberId === memberId && t >= s.startTime && t < s.endTime,
+  )
+}
+
+/** Ativo APENAS como ad-lib (vocal de apoio) no instante t. */
+function isAdlibActive(project: Project, memberId: string, t: number): boolean {
+  return (
+    !isActive(project, memberId, t) &&
+    project.segments.some(
+      (s) => s.isAdlib === true && s.memberId === memberId && t >= s.startTime && t < s.endTime,
+    )
   )
 }
 
@@ -166,16 +251,17 @@ function easeOutCubic(x: number): number {
  */
 function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: number, W: number): void {
   const hl = headerLayout(project)
+  const horizontal = project.format === 'horizontal'
   const p = easeOutCubic(Math.min(1, t / 1.1)) // 0→1 em 1.1s
   const rise = (1 - p) * 46
 
   ctx.save()
   ctx.textAlign = 'center'
 
-  // Rótulo com tracking largo
+  // Rótulo com tracking largo (16:9: +25% de escala)
   ctx.globalAlpha = Math.min(1, p * 1.2) * 0.55
   ctx.fillStyle = '#ffffff'
-  ctx.font = '600 26px Unbounded, Outfit, sans-serif'
+  ctx.font = `600 ${horizontal ? 32 : 26}px Unbounded, Outfit, sans-serif`
   ctx.fillText('L I N E   D I S T R I B U T I O N', W / 2, hl.labelY + rise * 0.5)
 
   // Título em fonte display com glow rosa sutil
@@ -187,13 +273,160 @@ function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: numb
   ctx.fillText(project.title || 'Sem título', W / 2, hl.titleY + rise, W - 120)
   ctx.shadowBlur = 0
 
-  // Artista
+  // Artista (nome do grupo — 16:9: +25% de escala)
   ctx.globalAlpha = p * 0.7
-  ctx.font = '500 38px Outfit, sans-serif'
+  ctx.font = `500 ${horizontal ? 48 : 38}px Outfit, sans-serif`
   ctx.fillText(project.artist || '', W / 2, hl.artistY + rise, W - 160)
 
   ctx.restore()
   ctx.textAlign = 'left'
+}
+
+/**
+ * Entry-point da máquina de estados do vídeo: recebe o tempo de VÍDEO
+ * (vt) e despacha para INTRO / MAIN+RANKING / OUTRO. O drawFrame original
+ * permanece intacto — continua recebendo tempo de ÁUDIO, preservando toda a
+ * sincronia existente (barras, letras, ranking, visualizador).
+ */
+export function drawVideoFrame(
+  ctx: CanvasRenderingContext2D,
+  cache: HTMLCanvasElement,
+  project: Project,
+  avatars: Map<string, HTMLImageElement>,
+  states: Map<string, MemberRenderState>,
+  totals: Map<string, number>,
+  vt: number,
+  audioDur: number,
+  freq?: Uint8Array,
+): void {
+  const { W, H } = videoDims(project.format)
+  const state = videoStateAt(project, vt, audioDur)
+  const { introDur, mainDur, rankingDur } = videoTiming(project, audioDur)
+
+  if (state === 'INTRO') {
+    drawIntroScreen(ctx, project, vt, W, H)
+    return
+  }
+  if (state === 'RANKING') {
+    // Fase dedicada de 5s: fundo do projeto + placar com fade-in suave
+    ctx.drawImage(cache, 0, 0)
+    drawFinalRanking(ctx, project, avatars, totals, vt - introDur - mainDur, W, H)
+    return
+  }
+  if (state === 'OUTRO') {
+    drawOutroScreen(ctx, project, vt - introDur - mainDur - rankingDur, W, H)
+    return
+  }
+  // MAIN: tempo de áudio = vt - introDur (sincronia intacta)
+  drawFrame(ctx, cache, project, avatars, states, totals, vt - introDur, audioDur, freq)
+}
+
+/**
+ * Tela de INTRO (0..INTRO_SECS): fundo escuro, nome do grupo (menor) e
+ * título da música (maior, negrito) centralizados. Fade in no primeiro
+ * segundo, fade out no último.
+ */
+function drawIntroScreen(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  t: number,
+  W: number,
+  H: number,
+): void {
+  // Fundo totalmente escuro (mesma paleta do fundo do projeto)
+  const grad = ctx.createLinearGradient(0, 0, 0, H)
+  grad.addColorStop(0, '#100c18')
+  grad.addColorStop(1, '#07050c')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, W, H)
+
+  // Fade in (1º segundo) e fade out (último segundo)
+  const fadeIn = easeOutCubic(Math.min(1, t / 1))
+  const fadeOut = Math.min(1, Math.max(0, (INTRO_SECS - t) / 1))
+  const a = Math.min(fadeIn, fadeOut)
+  const rise = (1 - fadeIn) * 30 // leve slide-up na entrada
+
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  const horizontal = project.format === 'horizontal'
+  const cy = H / 2
+
+  // Nome do grupo (fonte menor, tracking largo)
+  ctx.globalAlpha = a * 0.7
+  ctx.fillStyle = '#ffffff'
+  ctx.font = `600 ${horizontal ? 34 : 40}px Outfit, sans-serif`
+  ctx.fillText((project.artist || '').toUpperCase(), W / 2, cy - (horizontal ? 64 : 80) + rise, W - 160)
+
+  // Título da música (fonte maior, negrito, glow rosa)
+  ctx.globalAlpha = a
+  ctx.shadowColor = 'rgba(236, 72, 153, 0.55)'
+  ctx.shadowBlur = 34 * a
+  ctx.font = `800 ${horizontal ? 72 : 84}px Unbounded, Outfit, sans-serif`
+  ctx.fillText(project.title || 'Sem título', W / 2, cy + (horizontal ? 16 : 20) + rise, W - 140)
+  ctx.shadowBlur = 0
+
+  // Linha decorativa sutil abaixo do título
+  ctx.globalAlpha = a * 0.35
+  ctx.fillStyle = '#ec4899'
+  const lineW = 120 * fadeIn
+  ctx.fillRect(W / 2 - lineW / 2, cy + (horizontal ? 90 : 110), lineW, 4)
+
+  ctx.restore()
+  ctx.globalAlpha = 1
+}
+
+/**
+ * Tela de OUTRO (últimos OUTRO_SECS): fade do ranking para tela escura com
+ * o texto de encerramento centralizado, com transição suave nas duas pontas.
+ */
+function drawOutroScreen(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  t: number, // 0..OUTRO_SECS dentro do outro
+  W: number,
+  H: number,
+): void {
+  // Fade para escuro: overlay cresce no primeiro 0.8s (transição do ranking)
+  const darken = easeOutCubic(Math.min(1, t / 0.8))
+  const grad = ctx.createLinearGradient(0, 0, 0, H)
+  grad.addColorStop(0, '#100c18')
+  grad.addColorStop(1, '#07050c')
+  ctx.save()
+  ctx.globalAlpha = darken
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, W, H)
+
+  // Texto entra depois da transição e some suavemente no último 0.6s
+  const fadeIn = easeOutCubic(Math.min(1, Math.max(0, (t - 0.5) / 0.8)))
+  const fadeOut = Math.min(1, Math.max(0, (OUTRO_SECS - t) / 0.6))
+  const a = Math.min(fadeIn, fadeOut)
+  const rise = (1 - fadeIn) * 24
+
+  ctx.globalAlpha = a
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = '#ffffff'
+  ctx.shadowColor = 'rgba(236, 72, 153, 0.5)'
+  ctx.shadowBlur = 28 * a
+  const horizontal = project.format === 'horizontal'
+  ctx.font = `800 ${horizontal ? 56 : 64}px Unbounded, Outfit, sans-serif`
+  ctx.fillText(project.outroText?.trim() || DEFAULT_OUTRO_TEXT, W / 2, H / 2 + rise, W - 160)
+  ctx.shadowBlur = 0
+
+  // Crédito sutil com o nome da música
+  ctx.globalAlpha = a * 0.45
+  ctx.font = '500 30px Outfit, sans-serif'
+  ctx.fillText(
+    [project.artist, project.title].filter(Boolean).join(' — '),
+    W / 2,
+    H / 2 + (horizontal ? 70 : 84) + rise,
+    W - 180,
+  )
+
+  ctx.restore()
+  ctx.globalAlpha = 1
 }
 
 /**
@@ -222,12 +455,8 @@ export function drawFrame(
   const members = project.members
   const n = members.length
 
-  // --- Tela de Ranking Final nos últimos segundos ---
-  const rankingStart = duration && duration > FINAL_RANKING_SECS + 3 ? duration - FINAL_RANKING_SECS : Infinity
-  if (n > 0 && t >= rankingStart) {
-    drawFinalRanking(ctx, project, avatars, totals, t - rankingStart, W, H)
-    return
-  }
+  // (O Ranking Final agora é uma fase dedicada da máquina de estados,
+  //  despachada pelo drawVideoFrame — nunca sobrepõe alguém cantando.)
 
   // --- Visualizador de espectro (camada de fundo, atrás das barras) ---
   if (freq) drawVisualizer(ctx, project, freq, t, W, H)
@@ -254,18 +483,24 @@ export function drawFrame(
   // Layout vertical (zona reservada acima das barras para bolha + letras)
   const horizontal = project.format === 'horizontal'
   const topY = barsTop(project)
-  const bottomY = H - (horizontal ? 50 : 120)
+  // 16:9: margem inferior de 110px — zona exclusiva do visualizador (70px
+  // de onda máxima + 40px de folga), sem colisão com a barra do último membro
+  const bottomY = H - (horizontal ? 110 : 120)
   const availH = bottomY - topY
-  const rowH = Math.min(horizontal ? 140 : 190, availH / n)
+  // 16:9: linhas mais altas (160) = mais respiro vertical entre membros
+  const rowH = Math.min(horizontal ? 160 : 190, availH / n)
   const startY = topY + (availH - rowH * n) / 2
 
-  const r = Math.max(horizontal ? 22 : 38, Math.min(62, rowH * 0.32)) // raio do avatar
+  const r = Math.max(horizontal ? 24 : 38, Math.min(62, rowH * 0.32)) // raio do avatar
   const avatarCx = 90 + r
   const barX = avatarCx + r + 28
-  const barH = Math.max(horizontal ? 18 : 26, Math.min(40, rowH * 0.24))
+  // 16:9: barras ~20% mais grossas (18→22 mín, fração 0.24→0.28)
+  const barH = horizontal
+    ? Math.max(22, Math.min(46, rowH * 0.28))
+    : Math.max(26, Math.min(40, rowH * 0.24))
   const maxBarW = W - barX - 200
-  const nameFont = horizontal ? 28 : 34
-  const timeFont = horizontal ? 26 : 30
+  const nameFont = horizontal ? 30 : 34
+  const timeFont = horizontal ? 27 : 30
 
   for (const m of members) {
     let st = states.get(m.id)
@@ -273,25 +508,46 @@ export function drawFrame(
     const targetY = startY + targetRank * rowH + rowH / 2
     const targetW = ((sung.get(m.id) ?? 0) / absoluteMax) * maxBarW
     const active = isActive(project, m.id, t)
+    const adlib = isAdlibActive(project, m.id, t)
 
     if (!st || !st.initialized) {
-      st = { y: targetY, barW: targetW, glow: active ? 1 : 0, initialized: true }
+      st = {
+        y: targetY,
+        barW: targetW,
+        glow: active ? 1 : 0,
+        adlibGlow: adlib ? 1 : 0,
+        scale: active ? ACTIVE_SCALE : INACTIVE_SCALE,
+        initialized: true,
+      }
       states.set(m.id, st)
     }
 
-    // Lerp: posição Y (troca de ranking fluida), largura e glow (fade in/out)
+    // Lerp: posição Y (troca de ranking fluida), largura, glow e câmera
     st.y = lerp(st.y, targetY, 0.12)
     st.barW = lerp(st.barW, targetW, 0.18)
     st.glow = lerp(st.glow, active ? 1 : 0, 0.14)
+    st.adlibGlow = lerp(st.adlibGlow ?? 0, adlib ? 1 : 0, 0.14)
+    st.scale = lerp(st.scale, active ? ACTIVE_SCALE : INACTIVE_SCALE, 0.1)
 
     const cy = st.y
     const glow = st.glow
     // "Saiu do chat": última linha já cantada → escurece para 40%
     const left = hasLeftChat(lastEnd, m.id, t)
-    const alpha = left ? 0.4 : 0.35 + 0.65 * glow
+    // Ad-lib dá um realce parcial na lista (sem roubar o foco do principal)
+    const alpha = left ? 0.4 : 0.35 + 0.65 * Math.max(glow, st.adlibGlow * 0.55)
     const ringColor = left ? desaturateColor(m.color) : m.color
 
     ctx.globalAlpha = alpha
+
+    // --- Câmera Dinâmica (Ken Burns): zoom centralizado SÓ no avatar ---
+    // Pulsação lenta ("respirar") proporcional ao glow — baseada em t (tempo
+    // do vídeo), não em Date.now(), para a exportação ser determinística.
+    const breath = Math.sin(t * Math.PI) * 0.02 * glow
+    const camScale = st.scale + breath
+    ctx.save()
+    ctx.translate(avatarCx, cy)
+    ctx.scale(camScale, camScale)
+    ctx.translate(-avatarCx, -cy)
 
     // --- Círculo colorido atrás do avatar (recebe o neon) ---
     if (!left && glow > 0.02) {
@@ -311,6 +567,18 @@ export function drawFrame(
     } else {
       drawAvatar(ctx, avatarImg, m.name, avatarCx, cy, r)
     }
+
+    // Ícone de "saiu do chat" acompanha o zoom para ficar preso à borda
+    if (left) {
+      ctx.globalAlpha = Math.min(1, alpha * 2.2)
+      drawOffBadge(ctx, avatarCx, cy, r)
+      ctx.globalAlpha = alpha
+    }
+
+    // Restaura a transformação: nome, barra e tempo ficam SEM zoom,
+    // perfeitamente alinhados na grade original.
+    ctx.restore()
+    ctx.globalAlpha = alpha
 
     // --- Nome ---
     ctx.fillStyle = '#ffffff'
@@ -334,17 +602,100 @@ export function drawFrame(
     ctx.font = `600 ${timeFont}px Outfit, sans-serif`
     ctx.fillText(`${(sung.get(m.id) ?? 0).toFixed(1)}s`, barX + w + 18, cy + barH / 2)
 
-    // --- Ícone de status: porta no canto do avatar (fica até o fim) ---
-    if (left) {
-      ctx.globalAlpha = Math.min(1, alpha * 2.2) // badge mais visível que o resto
-      drawOffBadge(ctx, avatarCx, cy, r)
-    }
-
     ctx.globalAlpha = 1
   }
 
   drawVoiceBubble(ctx, project, avatars, states, topY, t, W)
+  drawAdlibBubble(ctx, project, avatars, states, W)
   drawLeftChatToasts(ctx, project, lastEnd, avatars, t, W)
+}
+
+/**
+ * "Lugarzinho" do Ad-lib: card compacto flutuando no canto superior direito,
+ * separado do 'Cantando Agora' principal. Avatares em escala reduzida (~0.65
+ * do tamanho da bolha principal), nota musical ao lado e opacidade máxima de
+ * 80% — deixa claro que é vocal de apoio, sem roubar o foco do cantor líder.
+ */
+function drawAdlibBubble(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  avatars: Map<string, HTMLImageElement>,
+  states: Map<string, MemberRenderState>,
+  W: number,
+): void {
+  const singers = project.members.filter((m) => (states.get(m.id)?.adlibGlow ?? 0) > 0.05)
+  if (singers.length === 0) return
+
+  // Fade/pop pelo adlibGlow (já suavizado por lerp) — teto de 80% de opacidade
+  const g = Math.min(1, Math.max(...singers.map((m) => states.get(m.id)!.adlibGlow)))
+  const a = g * 0.8
+  const scale = 0.9 + 0.1 * g
+
+  // Escala reduzida: avatar ~0.65 do raio da bolha principal (52 → 34)
+  const r = 34
+  const overlap = r * 0.75
+  const avatarsW = r * 2 + (singers.length - 1) * overlap
+  const names = singers.map((m) => m.name).join(' + ')
+  ctx.font = '700 24px Outfit, sans-serif'
+  const namesW = Math.min(ctx.measureText(names).width, 300)
+  ctx.font = '700 15px Outfit, sans-serif'
+  const labelW = ctx.measureText('AD-LIB ♪').width
+  const textAreaW = Math.max(namesW, labelW)
+  const padX = 22
+  const gap = 16
+  const cardH = 92
+  const cardW = padX + avatarsW + gap + textAreaW + padX
+  const mainColor = singers[0].color
+
+  // Ancorado no canto superior direito, abaixo do cabeçalho
+  const headerEndY = headerLayout(project).headerEndY
+  const cx = W - 60 - cardW / 2
+  const cy = headerEndY + 24
+
+  ctx.save()
+  ctx.globalAlpha = a
+  ctx.translate(cx, cy)
+  ctx.scale(scale, scale)
+  const x0 = -cardW / 2
+
+  // Card glass discreto (menos brilho que a bolha principal)
+  ctx.shadowColor = mainColor
+  ctx.shadowBlur = 16 * g
+  ctx.fillStyle = 'rgba(22, 17, 34, 0.5)'
+  ctx.beginPath()
+  ctx.roundRect(x0, -cardH / 2, cardW, cardH, cardH / 2)
+  ctx.fill()
+  ctx.shadowBlur = 0
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.roundRect(x0, -cardH / 2, cardW, cardH, cardH / 2)
+  ctx.stroke()
+
+  // Avatares reduzidos empilhados
+  for (let i = singers.length - 1; i >= 0; i--) {
+    const m = singers[i]
+    const acx = x0 + padX + r + i * overlap
+    ctx.fillStyle = m.color
+    ctx.beginPath()
+    ctx.arc(acx, 0, r + 3, 0, Math.PI * 2)
+    ctx.fill()
+    drawAvatar(ctx, avatars.get(m.id), m.name, acx, 0, r)
+  }
+
+  // Rótulo com nota musical + nomes
+  const textX = x0 + padX + avatarsW + gap
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = mainColor
+  ctx.font = '700 15px Outfit, sans-serif'
+  ctx.fillText('AD-LIB ♪', textX, -20)
+  ctx.fillStyle = 'rgba(255,255,255,0.92)'
+  ctx.font = '700 24px Outfit, sans-serif'
+  ctx.fillText(names, textX, 10, textAreaW)
+  ctx.textBaseline = 'alphabetic'
+  ctx.restore()
+  ctx.globalAlpha = 1
 }
 
 function drawAvatar(
@@ -397,8 +748,10 @@ function activeLyricLayers(project: Project, t: number): {
   romanized: string
   translation: string
 } {
+  // Mesmo critério do isActive: fim estritamente exclusivo (t < endTime).
+  // Ad-libs ficam fora das letras principais (são vocais de apoio).
   const active = project.segments.filter(
-    (s) => t >= s.startTime && t <= s.endTime,
+    (s) => !s.isAdlib && t >= s.startTime && t < s.endTime,
   )
   const uniq = (vals: (string | undefined)[]) => [...new Set(vals.map((v) => v?.trim()).filter(Boolean))] as string[]
   return {
@@ -427,16 +780,23 @@ function drawVoiceBubble(
   const singers = project.members.filter((m) => (states.get(m.id)?.glow ?? 0) > 0.05)
   if (singers.length === 0) return
 
+  const horizontal = project.format === 'horizontal'
+  // 16:9: bolha 25% maior para ocupar o centro do palco widescreen
+  const fmtScale = horizontal ? 1.25 : 1
   // Opacidade/escala da bolha = maior glow entre os cantores (pop suave)
   const a = Math.min(1, Math.max(...singers.map((m) => states.get(m.id)!.glow)))
-  const scale = 0.86 + 0.14 * a
+  const scale = (0.86 + 0.14 * a) * fmtScale
 
   const layers = activeLyricLayers(project, t)
   const hasLyric = !!(layers.hangul || layers.romanized || layers.translation)
 
   const headerEndY = headerLayout(project).headerEndY
-  // Com letra, a bolha sobe para abrir espaço para o texto abaixo dela
-  const bubbleCy = hasLyric ? headerEndY + 92 : (headerEndY + barsTopY) / 2 + 10
+  // Eixo Y TRAVADO de forma absoluta: a bolha fica sempre no mesmo lugar,
+  // com ou sem letra, com 1 ou vários cantores. Só a largura cresce
+  // horizontalmente (centralizada), então nada é empurrado para cima/baixo.
+  // 16:9: centro geométrico entre o fim do header e o topo das barras —
+  // elimina o buraco vazio no meio da tela widescreen.
+  const bubbleCy = horizontal ? (headerEndY + barsTopY) / 2 : headerEndY + 92
 
   // Geometria: avatares sobrepostos + nomes
   const r = 52
@@ -516,8 +876,9 @@ function drawVoiceBubble(
   ctx.restore()
 
   // --- Letras sincronizadas em camadas (estilo K-pop edit) ---
+  // O offset considera a escala do formato (a bolha é maior no 16:9)
   if (hasLyric) {
-    drawLyricLayers(ctx, layers, mainColor, bubbleCy + cardH / 2 + 26, barsTopY, a, W)
+    drawLyricLayers(ctx, layers, mainColor, bubbleCy + (cardH * fmtScale) / 2 + 26, barsTopY, a, W)
   }
 }
 

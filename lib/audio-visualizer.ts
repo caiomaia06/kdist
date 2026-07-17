@@ -29,14 +29,26 @@ function makeHandle(ctx: AudioContext): AnalyserHandle {
 // o WeakMap garante reuso mesmo se o src do <audio> mudar.
 const elementGraphs = new WeakMap<HTMLAudioElement, { ctx: AudioContext; handle: AnalyserHandle }>()
 
+// AudioContext ÚNICO e compartilhado do preview. Criar um contexto novo a
+// cada montagem do player (HMR, trocar de projeto, dashboard → editor)
+// esgota o limite de ~6 AudioContexts do navegador — a partir daí o
+// analyser falhava em silêncio e o visualizador sumia do canvas.
+let sharedCtx: AudioContext | null = null
+function getSharedContext(): AudioContext {
+  if (!sharedCtx || sharedCtx.state === 'closed') sharedCtx = new AudioContext()
+  return sharedCtx
+}
+
 /**
  * Conecta o <audio> do preview: elemento → analyser → alto-falantes.
  * Deve ser chamado a partir de um gesto do usuário (ex.: clique em Play).
+ * Reutiliza um único AudioContext para a página inteira; cada elemento
+ * novo só ganha um MediaElementSource novo dentro do mesmo contexto.
  */
 export function createElementAnalyser(audio: HTMLAudioElement): AnalyserHandle {
   let graph = elementGraphs.get(audio)
   if (!graph) {
-    const ctx = new AudioContext()
+    const ctx = getSharedContext()
     const handle = makeHandle(ctx)
     const source = ctx.createMediaElementSource(audio)
     source.connect(handle.analyser)
@@ -70,7 +82,8 @@ export function readFrequency(handle: AnalyserHandle): Uint8Array {
 function activeSingerColors(project: Project, t: number): string[] {
   const ids = new Set(
     project.segments
-      .filter((s) => t >= s.startTime && t <= s.endTime)
+      // Fim estritamente exclusivo (t < endTime), igual ao isActive do renderer
+      .filter((s) => t >= s.startTime && t < s.endTime)
       .map((s) => s.memberId),
   )
   return project.members.filter((m) => ids.has(m.id)).map((m) => m.color)
@@ -94,7 +107,13 @@ export function drawVisualizer(
 ): void {
   const colors = activeSingerColors(project, t)
   const horizontal = project.format === 'horizontal'
-  const maxBarH = horizontal ? 110 : 150
+  // Safe Zone: a onda no volume MÁXIMO nunca toca a barra do último membro.
+  // O renderer reserva 110px (16:9) / 120px (9:16) de rodapé abaixo da zona
+  // de barras; as ondas ficam sempre 10px+ abaixo desse limite e respeitam
+  // o teto de 15% da altura do canvas.
+  const reserved = horizontal ? 110 : 120
+  const maxBarH = Math.min(horizontal ? 70 : 110, reserved - 10, H * 0.15)
+  // Ancorado no exato limite inferior da tela: y = H - alturaDaBarra
   const baseY = H
   const bins = 56 // usa as frequências baixas/médias (onde mora a batida)
   const gap = 4

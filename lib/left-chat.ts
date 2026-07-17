@@ -149,7 +149,9 @@ export function drawLeftChatToasts(
   const horizontal = W > 1200
   const toastW = horizontal ? 420 : 480
   const toastH = 84
-  const baseY = horizontal ? 30 : 60
+  // 16:9: margens generosas (48px) para o toast não parecer grudado na borda
+  const baseY = horizontal ? 48 : 60
+  const marginX = horizontal ? 48 : 28
 
   active.forEach(({ member: m, age }, i) => {
     // Entrada: pop com overshoot (0→0.35s). Saída: fade + sobe (últimos 0.6s)
@@ -159,7 +161,7 @@ export function drawLeftChatToasts(
     const pop = easeOutBack(inP)
     const rise = (1 - pop) * 30 + outP * 26 // entra subindo, sai subindo mais
 
-    const x0 = W - toastW - 28
+    const x0 = W - toastW - marginX
     const y0 = baseY + i * (toastH + 12) - rise
 
     ctx.save()

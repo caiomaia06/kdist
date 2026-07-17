@@ -14,6 +14,7 @@ export interface Segment {
   lyricHangul?: string // letra original em Hangul
   lyricRomanized?: string // romanização
   lyricTranslation?: string // tradução
+  isAdlib?: boolean // vocal de apoio: não ocupa o 'Cantando Agora' principal
 }
 
 export type VideoFormat = 'vertical' | 'horizontal'
@@ -37,6 +38,9 @@ export interface Project {
   audioName?: string
   duration?: number // segundos
   format?: VideoFormat // 'vertical' (TikTok 9:16, padrão) ou 'horizontal' (YouTube 16:9)
+  introEnabled?: boolean // tela cinematográfica de entrada (3s antes do áudio)
+  outroEnabled?: boolean // tela cinematográfica de saída (3s após o ranking)
+  outroText?: string // texto de encerramento (padrão: 'Thanks for watching!')
   createdAt: number
   updatedAt: number
 }
