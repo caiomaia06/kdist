@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ImageIcon, Music, RectangleHorizontal, RectangleVertical } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Logo } from '@/components/logo'
+import { LyricsPanel } from '@/components/lyrics-panel'
 import { MembersPanel } from '@/components/members-panel'
 import { PreviewCanvas, type PreviewHandle } from '@/components/preview-canvas'
 import { ThemeSwitcher } from '@/components/theme-switcher'
@@ -19,7 +20,7 @@ interface EditorProps {
   onBack: () => void
 }
 
-type Tab = 'info' | 'members' | 'timeline'
+type Tab = 'info' | 'members' | 'timeline' | 'lyrics'
 
 export function Editor({ initialProject, groups = [], userId, onBack }: EditorProps) {
   const [project, setProject] = useState<Project>(initialProject)
@@ -89,6 +90,7 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
     { id: 'info', label: 'Informações' },
     { id: 'members', label: `Membros (${project.members.length})` },
     { id: 'timeline', label: `Timeline (${project.segments.length})` },
+    { id: 'lyrics', label: 'Letras' },
   ]
 
   return (
@@ -325,6 +327,16 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
                 segments={project.segments}
                 onChange={(segments: Segment[]) => patch({ segments })}
                 getTime={() => previewRef.current?.getTime() ?? 0}
+              />
+            </div>
+          )}
+
+          {tab === 'lyrics' && (
+            <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+              <LyricsPanel
+                members={project.members}
+                segments={project.segments}
+                onChange={(segments: Segment[]) => patch({ segments })}
               />
             </div>
           )}

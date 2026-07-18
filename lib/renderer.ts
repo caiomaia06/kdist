@@ -181,9 +181,11 @@ export function buildBackgroundCache(
   ctx.fillRect(0, 0, W, H)
 
   // Capa nítida pequena no topo (se existir)
+  // 16:9: o bloco de informações vive no terço ESQUERDO (centrado em W*0.18);
+  // 9:16 permanece centralizado como sempre foi.
   if (coverImg) {
     const { coverSize, coverCy } = headerLayout(project)
-    const cx = W / 2
+    const cx = project.format === 'horizontal' ? W * 0.18 : W / 2
     ctx.save()
     ctx.beginPath()
     ctx.roundRect(cx - coverSize / 2, coverCy - coverSize / 2, coverSize, coverSize, 24)
@@ -255,28 +257,34 @@ function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: numb
   const p = easeOutCubic(Math.min(1, t / 1.1)) // 0→1 em 1.1s
   const rise = (1 - p) * 46
 
+  // 16:9: bloco de informações contido no terço ESQUERDO da tela (centrado
+  // em W*0.18, alinhado à capa). 9:16: centralizado, como sempre.
+  const cx = horizontal ? W * 0.18 : W / 2
+  const maxTitleW = horizontal ? W * 0.34 : W - 120
+  const maxArtistW = horizontal ? W * 0.34 : W - 160
+
   ctx.save()
   ctx.textAlign = 'center'
 
-  // Rótulo com tracking largo (16:9: +25% de escala)
+  // Rótulo com tracking largo (16:9: fonte menor para caber no terço)
   ctx.globalAlpha = Math.min(1, p * 1.2) * 0.55
   ctx.fillStyle = '#ffffff'
-  ctx.font = `600 ${horizontal ? 32 : 26}px Unbounded, Outfit, sans-serif`
-  ctx.fillText('L I N E   D I S T R I B U T I O N', W / 2, hl.labelY + rise * 0.5)
+  ctx.font = `600 ${horizontal ? 24 : 26}px Unbounded, Outfit, sans-serif`
+  ctx.fillText('L I N E   D I S T R I B U T I O N', cx, hl.labelY + rise * 0.5, maxTitleW)
 
   // Título em fonte display com glow rosa sutil
   ctx.globalAlpha = p
   ctx.shadowColor = 'rgba(236, 72, 153, 0.55)'
   ctx.shadowBlur = 30 * p
   ctx.fillStyle = '#ffffff'
-  ctx.font = `800 ${hl.titleFont}px Unbounded, Outfit, sans-serif`
-  ctx.fillText(project.title || 'Sem título', W / 2, hl.titleY + rise, W - 120)
+  ctx.font = `800 ${horizontal ? 56 : hl.titleFont}px Unbounded, Outfit, sans-serif`
+  ctx.fillText(project.title || 'Sem título', cx, hl.titleY + rise, maxTitleW)
   ctx.shadowBlur = 0
 
-  // Artista (nome do grupo — 16:9: +25% de escala)
+  // Artista (nome do grupo)
   ctx.globalAlpha = p * 0.7
-  ctx.font = `500 ${horizontal ? 48 : 38}px Outfit, sans-serif`
-  ctx.fillText(project.artist || '', W / 2, hl.artistY + rise, W - 160)
+  ctx.font = `500 ${horizontal ? 40 : 38}px Outfit, sans-serif`
+  ctx.fillText(project.artist || '', cx, hl.artistY + rise, maxArtistW)
 
   ctx.restore()
   ctx.textAlign = 'left'
@@ -647,10 +655,13 @@ function drawAdlibBubble(
   const cardW = padX + avatarsW + gap + textAreaW + padX
   const mainColor = singers[0].color
 
-  // Ancorado no canto superior direito, abaixo do cabeçalho
+  // 9:16: canto superior direito, abaixo do cabeçalho (como sempre).
+  // 16:9: canto ESQUERDO abaixo do bloco de informações — o lado direito
+  // agora pertence ao bloco de letras alinhado à direita.
   const headerEndY = headerLayout(project).headerEndY
-  const cx = W - 60 - cardW / 2
-  const cy = headerEndY + 24
+  const horizontal = project.format === 'horizontal'
+  const cx = horizontal ? 60 + cardW / 2 : W - 60 - cardW / 2
+  const cy = headerEndY + (horizontal ? 70 : 24)
 
   ctx.save()
   ctx.globalAlpha = a
@@ -791,12 +802,15 @@ function drawVoiceBubble(
   const hasLyric = !!(layers.hangul || layers.romanized || layers.translation)
 
   const headerEndY = headerLayout(project).headerEndY
+  const { H } = videoDims(project.format)
   // Eixo Y TRAVADO de forma absoluta: a bolha fica sempre no mesmo lugar,
   // com ou sem letra, com 1 ou vários cantores. Só a largura cresce
   // horizontalmente (centralizada), então nada é empurrado para cima/baixo.
-  // 16:9: centro geométrico entre o fim do header e o topo das barras —
-  // elimina o buraco vazio no meio da tela widescreen.
-  const bubbleCy = horizontal ? (headerEndY + barsTopY) / 2 : headerEndY + 92
+  // 16:9: centro horizontal absoluto (W/2) flutuando em ~47% da altura, no
+  // espaço vazio logo acima das barras (com folga mínima garantida).
+  const bubbleCy = horizontal
+    ? Math.min(H * 0.47, barsTopY - (136 * 1.25) / 2 - 24)
+    : headerEndY + 92
 
   // Geometria: avatares sobrepostos + nomes
   const r = 52
@@ -876,10 +890,68 @@ function drawVoiceBubble(
   ctx.restore()
 
   // --- Letras sincronizadas em camadas (estilo K-pop edit) ---
-  // O offset considera a escala do formato (a bolha é maior no 16:9)
+  // 9:16: abaixo da bolha, centralizadas (como sempre).
+  // 16:9: bloco dedicado no lado DIREITO da tela, alinhado pela direita —
+  // espelha o bloco de informações que agora vive no lado esquerdo.
   if (hasLyric) {
-    drawLyricLayers(ctx, layers, mainColor, bubbleCy + (cardH * fmtScale) / 2 + 26, barsTopY, a, W)
+    if (horizontal) {
+      drawLyricLayersRight(ctx, layers, mainColor, a, W)
+    } else {
+      drawLyricLayers(ctx, layers, mainColor, bubbleCy + (cardH * fmtScale) / 2 + 26, barsTopY, a, W)
+    }
   }
+}
+
+/**
+ * Letras no 16:9: bloco alinhado pela DIREITA (textAlign right) no terço
+ * direito superior da tela, com fontes maiores que no vertical. Espelha o
+ * bloco de informações da esquerda, ocupando o espaço vazio do widescreen.
+ */
+function drawLyricLayersRight(
+  ctx: CanvasRenderingContext2D,
+  layers: LyricLayers,
+  color: string,
+  alpha: number,
+  W: number,
+): void {
+  const rightX = W - 80 // borda direita com margem
+  const maxW = W * 0.42
+  // [texto, fonte, altura de linha, alpha] — fontes ~15% maiores no 16:9
+  const rows: Array<[string, string, number, number]> = []
+  if (layers.hangul)
+    rows.push([layers.hangul, `800 56px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`, 70, 1])
+  if (layers.romanized) rows.push([layers.romanized, '800 48px Outfit, sans-serif', 62, 1])
+  if (layers.translation) rows.push([layers.translation, 'italic 500 34px Outfit, sans-serif', 46, 0.75])
+  if (rows.length === 0) return
+
+  ctx.save()
+  ctx.textAlign = 'right'
+  ctx.textBaseline = 'middle'
+
+  // Bloco começa no topo direito (alinhado ao rótulo do header à esquerda)
+  let y = 150
+  for (const [text, font, lineH, a] of rows) {
+    ctx.font = font
+    const lines = wrapText(ctx, text, maxW, 2)
+    for (const line of lines) {
+      const cy = y + lineH / 2
+      ctx.globalAlpha = alpha * a
+      ctx.shadowColor = color
+      ctx.shadowBlur = 26 * alpha
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
+      ctx.lineWidth = 8
+      ctx.lineJoin = 'round'
+      ctx.strokeText(line, rightX, cy, maxW)
+      ctx.shadowBlur = 0
+      ctx.fillStyle = '#ffffff'
+      ctx.fillText(line, rightX, cy, maxW)
+      y += lineH
+    }
+  }
+
+  ctx.restore()
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
 }
 
 interface LyricLayers {
