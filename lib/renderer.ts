@@ -753,6 +753,38 @@ function drawAvatarSource(
   ctx.restore()
 }
 
+/** Duração do Fade In / Fade Out das letras (segundos). */
+const LYRIC_TRANSITION_SECS = 0.3
+
+/**
+ * Envelope de animação das letras: interpolação baseada no currentTime da
+ * música em relação a startTime/endTime do segmento ativo.
+ * - Fade In  (start → start+0.3s): alpha 0→1 e offsetY +15px→0 (slide up)
+ * - Sustentação: alpha 1, offsetY 0
+ * - Fade Out (end-0.3s → end): alpha 1→0
+ * Com segmentos sobrepostos, vence o de maior alpha (a letra que entra
+ * substitui suavemente a que sai).
+ */
+interface LyricEnvelope {
+  alpha: number
+  offsetY: number
+}
+
+function lyricEnvelope(project: Project, t: number): LyricEnvelope {
+  let best: LyricEnvelope = { alpha: 0, offsetY: 0 }
+  for (const s of project.segments) {
+    if (s.isAdlib || t < s.startTime || t >= s.endTime) continue
+    const fadeIn = Math.min(1, (t - s.startTime) / LYRIC_TRANSITION_SECS)
+    const fadeOut = Math.min(1, (s.endTime - t) / LYRIC_TRANSITION_SECS)
+    const alpha = Math.max(0, Math.min(fadeIn, fadeOut))
+    if (alpha > best.alpha) {
+      // Slide up só na entrada: +15px → 0 com easing suave
+      best = { alpha, offsetY: (1 - easeOutCubic(fadeIn)) * 15 }
+    }
+  }
+  return best
+}
+
 /** Letras ativas no instante t, nas três camadas. */
 function activeLyricLayers(project: Project, t: number): {
   hangul: string
@@ -893,11 +925,29 @@ function drawVoiceBubble(
   // 9:16: abaixo da bolha, centralizadas (como sempre).
   // 16:9: bloco dedicado no lado DIREITO da tela, alinhado pela direita —
   // espelha o bloco de informações que agora vive no lado esquerdo.
+  // Fade In + Slide Up na entrada e Fade Out na saída (envelope 0.3s),
+  // aplicados APENAS ao bloco de texto — save/restore garante que barras,
+  // avatares e a própria bolha nunca herdam a transparência.
   if (hasLyric) {
-    if (horizontal) {
-      drawLyricLayersRight(ctx, layers, mainColor, a, W)
-    } else {
-      drawLyricLayers(ctx, layers, mainColor, bubbleCy + (cardH * fmtScale) / 2 + 26, barsTopY, a, W)
+    const env = lyricEnvelope(project, t)
+    if (env.alpha > 0.01) {
+      ctx.save()
+      ctx.translate(0, env.offsetY)
+      if (horizontal) {
+        drawLyricLayersRight(ctx, layers, mainColor, a * env.alpha, W)
+      } else {
+        drawLyricLayers(
+          ctx,
+          layers,
+          mainColor,
+          bubbleCy + (cardH * fmtScale) / 2 + 26,
+          barsTopY,
+          a * env.alpha,
+          W,
+        )
+      }
+      ctx.restore()
+      ctx.globalAlpha = 1
     }
   }
 }

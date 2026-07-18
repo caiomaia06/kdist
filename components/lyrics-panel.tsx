@@ -1,6 +1,8 @@
 'use client'
 
-import { Music } from 'lucide-react'
+import { useState } from 'react'
+import { Languages, Loader2, Music } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import type { Member, Segment } from '@/lib/types'
 
 interface LyricsPanelProps {
@@ -22,9 +24,38 @@ function formatTime(s: number): string {
  */
 export function LyricsPanel({ members, segments, onChange }: LyricsPanelProps) {
   const sorted = [...segments].sort((a, b) => a.startTime - b.startTime)
+  const [translatingId, setTranslatingId] = useState<string | null>(null)
+  const [errorId, setErrorId] = useState<string | null>(null)
 
   const patchSegment = (id: string, p: Partial<Segment>) => {
     onChange(segments.map((s) => (s.id === id ? { ...s, ...p } : s)))
+  }
+
+  // Auto-Traduzir com IA: envia o Hangul (ou romanização legada) e preenche
+  // romanização + tradução — mesmo endpoint que a Timeline usava antes
+  const autoTranslate = async (s: Segment) => {
+    const sourceText = s.lyricHangul?.trim() || (s.lyricRomanized ?? s.lyric ?? '').trim()
+    if (!sourceText || translatingId) return
+    setTranslatingId(s.id)
+    setErrorId(null)
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: sourceText }),
+      })
+      if (!res.ok) throw new Error('translate failed')
+      const data = (await res.json()) as { romanized: string; translation: string }
+      patchSegment(s.id, {
+        lyricRomanized: data.romanized,
+        lyricTranslation: data.translation,
+        lyric: undefined,
+      })
+    } catch {
+      setErrorId(s.id)
+    } finally {
+      setTranslatingId(null)
+    }
   }
 
   const inputClass =
@@ -86,14 +117,35 @@ export function LyricsPanel({ members, segments, onChange }: LyricsPanelProps) {
                 </span>
               </div>
               <div className="flex flex-col gap-1.5">
-                <input
-                  value={s.lyricHangul ?? ''}
-                  onChange={(e) => patchSegment(s.id, { lyricHangul: e.target.value })}
-                  placeholder="한국어 (Hangul)"
-                  lang="ko"
-                  className={inputClass}
-                  aria-label={`Letra em Hangul de ${m?.name ?? 'membro'}`}
-                />
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={s.lyricHangul ?? ''}
+                    onChange={(e) => patchSegment(s.id, { lyricHangul: e.target.value })}
+                    placeholder="한국어 (Hangul)"
+                    lang="ko"
+                    className={inputClass}
+                    aria-label={`Letra em Hangul de ${m?.name ?? 'membro'}`}
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="h-11 shrink-0 px-2.5 text-xs md:h-8 md:px-2"
+                    onClick={() => autoTranslate(s)}
+                    disabled={
+                      !(s.lyricHangul?.trim() || (s.lyricRomanized ?? s.lyric ?? '').trim()) ||
+                      translatingId !== null
+                    }
+                    title="Preenche romanização e tradução automaticamente com IA"
+                    aria-label="Auto-traduzir letra"
+                  >
+                    {translatingId === s.id ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Languages className="size-3.5" />
+                    )}
+                    <span className="hidden md:inline-block">Auto</span>
+                  </Button>
+                </div>
                 <input
                   value={s.lyricRomanized ?? s.lyric ?? ''}
                   onChange={(e) => patchSegment(s.id, { lyricRomanized: e.target.value })}
@@ -108,6 +160,11 @@ export function LyricsPanel({ members, segments, onChange }: LyricsPanelProps) {
                   className={inputClass}
                   aria-label={`Tradução da letra de ${m?.name ?? 'membro'}`}
                 />
+                {errorId === s.id && (
+                  <p className="text-xs text-destructive" role="alert">
+                    Falha ao traduzir. Tente novamente.
+                  </p>
+                )}
               </div>
             </li>
           )

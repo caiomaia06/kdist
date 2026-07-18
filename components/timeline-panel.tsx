@@ -1,128 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { CircleDot, Keyboard, Languages, Loader2, MicVocal, Music, Plus, Trash2 } from 'lucide-react'
+import { CircleDot, Keyboard, Music, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { uid, type Member, type Segment } from '@/lib/types'
 
-/**
- * Campos de letra em 3 camadas (Hangul / romanização / tradução) com botão
- * Auto-Traduzir: envia o Hangul para a IA e preenche as outras duas camadas.
- */
-function LyricFields({
-  segment: s,
-  memberName,
-  onUpdate,
-}: {
-  segment: Segment
-  memberName?: string
-  onUpdate: (id: string, patch: Partial<Segment>) => void
-}) {
-  const [translating, setTranslating] = useState(false)
-  const [error, setError] = useState(false)
-  // Legado: `lyric` antigo aparece como romanização
-  const romanized = s.lyricRomanized ?? s.lyric ?? ''
-  const sourceText = s.lyricHangul?.trim() || romanized.trim()
-
-  const autoTranslate = async () => {
-    if (!sourceText || translating) return
-    setTranslating(true)
-    setError(false)
-    try {
-      const res = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: sourceText }),
-      })
-      if (!res.ok) throw new Error('translate failed')
-      const data = (await res.json()) as { romanized: string; translation: string }
-      onUpdate(s.id, {
-        lyricRomanized: data.romanized,
-        lyricTranslation: data.translation,
-        lyric: undefined,
-      })
-    } catch {
-      setError(true)
-    } finally {
-      setTranslating(false)
-    }
-  }
-
-  const inputClass =
-    'h-11 min-w-0 flex-1 rounded border border-input bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring md:h-7 md:px-1.5'
-
-  return (
-    <div className="flex flex-col gap-1 pl-5">
-      <div className="flex items-center gap-1.5">
-        <MicVocal className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <input
-          type="text"
-          value={s.lyricHangul ?? ''}
-          onChange={(e) => updateOrClear(onUpdate, s.id, 'lyricHangul', e.target.value)}
-          placeholder="한국어 — letra original (Hangul)"
-          maxLength={120}
-          lang="ko"
-          className={inputClass}
-          aria-label={`Letra em Hangul do trecho de ${memberName ?? 'membro'}`}
-        />
-        <Button
-          size="sm"
-          variant="secondary"
-          className="h-11 px-2.5 text-xs md:h-7 md:px-2"
-          onClick={autoTranslate}
-          disabled={!sourceText || translating}
-          title="Preenche romanização e tradução automaticamente com IA"
-          aria-label="Auto-traduzir letra"
-        >
-          {translating ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <Languages className="size-3.5" />
-          )}
-          <span className="hidden md:inline-block">Auto</span>
-        </Button>
-      </div>
-      <div className="flex items-center gap-1.5 pl-5">
-        <input
-          type="text"
-          value={romanized}
-          onChange={(e) =>
-            onUpdate(s.id, { lyricRomanized: e.target.value || undefined, lyric: undefined })
-          }
-          placeholder="Romanização (neoui kkumeul…)"
-          maxLength={120}
-          className={inputClass}
-          aria-label={`Romanização do trecho de ${memberName ?? 'membro'}`}
-        />
-      </div>
-      <div className="flex items-center gap-1.5 pl-5">
-        <input
-          type="text"
-          value={s.lyricTranslation ?? ''}
-          onChange={(e) => updateOrClear(onUpdate, s.id, 'lyricTranslation', e.target.value)}
-          placeholder="Tradução (Voando até o teu sonho…)"
-          maxLength={120}
-          className={inputClass}
-          aria-label={`Tradução do trecho de ${memberName ?? 'membro'}`}
-        />
-      </div>
-      {error && (
-        <p className="pl-5 text-xs text-destructive" role="alert">
-          Falha ao traduzir. Tente novamente.
-        </p>
-      )}
-    </div>
-  )
-}
-
-function updateOrClear(
-  onUpdate: (id: string, patch: Partial<Segment>) => void,
-  id: string,
-  key: 'lyricHangul' | 'lyricTranslation',
-  value: string,
-) {
-  onUpdate(id, { [key]: value || undefined })
-}
+// Os campos de letra (Hangul/Romanizado/Tradução) agora vivem exclusivamente
+// na aba 'Letras' (components/lyrics-panel.tsx). A Timeline foca apenas em
+// QUEM canta e QUANDO (membro + startTime/endTime).
 
 interface TimelinePanelProps {
   members: Member[]
@@ -427,7 +312,6 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
                   <Trash2 className="size-3.5 text-destructive" />
                 </Button>
               </div>
-              <LyricFields segment={s} memberName={m?.name} onUpdate={updateSegment} />
             </li>
           )
         })}
