@@ -615,8 +615,9 @@ export function drawFrame(
 
   drawVoiceBubble(ctx, project, avatars, states, topY, t, W)
   // Scrolling Lyrics: independente da bolha — durante silêncio a próxima
-  // letra já fica aguardando na tela (edge case do nextSegment)
-  drawScrollingLyrics(ctx, project, t, topY, W)
+  // letra já fica aguardando na tela. `states` identifica a sessão de
+  // renderização para o smoothActiveIndex (LERP) do scroll.
+  drawScrollingLyrics(ctx, project, t, topY, W, states)
   drawAdlibBubble(ctx, project, avatars, states, W)
   drawLeftChatToasts(ctx, project, lastEnd, avatars, t, W)
 }
@@ -756,10 +757,15 @@ function drawAvatarSource(
   ctx.restore()
 }
 
-/** Duração do Fade In / Fade Out da letra ATUAL (segundos). */
-const LYRIC_TRANSITION_SECS = 0.3
-/** Opacidade das linhas de contexto (passado/futuro) do scroll de letras. */
-const CONTEXT_LYRIC_ALPHA = 0.3
+/** Fator de interpolação do scroll de letras (0.1 = deslize suave). */
+const LYRIC_LERP_FACTOR = 0.1
+
+/**
+ * smoothActiveIndex por SESSÃO de renderização, keyed pelo Map de estados
+ * que preview e export já possuem separadamente — o scroll do preview nunca
+ * vaza para o export e vice-versa. WeakMap libera a memória junto da sessão.
+ */
+const smoothLyricIndexes = new WeakMap<Map<string, MemberRenderState>, { value: number }>()
 
 /** Um evento de letra na linha do tempo (dueto = evento único). */
 interface LyricEvent {
@@ -812,23 +818,18 @@ function lyricEvents(project: Project): LyricEvent[] {
 }
 
 /**
- * Contexto de scroll (estilo Spotify): acha o ÍNDICE do evento ativo em t →
- * past = events[index-1], current = events[index], next = events[index+1].
- * Edge case (silêncio): sem evento ativo, o evento mais próximo no FUTURO
- * já entra como `next` aguardando na tela, e o anterior segue como `past`.
+ * Índice-alvo (contínuo) do scroll de letras no instante t:
+ * - Evento ativo → seu índice exato (foco total).
+ * - Silêncio entre eventos → meio-caminho (ni - 0.5): a letra anterior sobe
+ *   parcialmente e a próxima já vem subindo de baixo, aguardando.
+ * - Depois da última letra → ela desliza para a posição de "passado".
  */
-function lyricContext(
-  events: LyricEvent[],
-  t: number,
-): { past?: LyricEvent; current?: LyricEvent; next?: LyricEvent } {
+function lyricTargetIndex(events: LyricEvent[], t: number): number {
   const index = events.findIndex((e) => t >= e.startTime && t < e.endTime)
-  if (index >= 0) {
-    return { past: events[index - 1], current: events[index], next: events[index + 1] }
-  }
+  if (index >= 0) return index
   const ni = events.findIndex((e) => e.startTime > t)
-  if (ni >= 0) return { past: events[ni - 1], next: events[ni] }
-  // A música já passou da última letra: ela permanece como passado
-  return { past: events[events.length - 1] }
+  if (ni >= 0) return ni - 0.5
+  return events.length - 0.5
 }
 
 /**
@@ -953,14 +954,16 @@ interface LyricLayers {
 }
 
 /**
- * Scrolling Lyrics (estilo Spotify/Apple Music): três posições no eixo Y —
- *   passado  em baseY - lyricSpacing (alpha 0.3, fonte reduzida)
- *   ATUAL    em baseY               (alpha 1.0 + Fade In/Out + Slide Up)
- *   futuro   em baseY + lyricSpacing (alpha 0.3, fonte reduzida)
- * 16:9: bloco alinhado pela DIREITA no terço direito. 9:16: centralizado
- * entre o selo 'Cantando Agora' e a zona das barras/visualizador.
- * Cada bloco é desenhado dentro do próprio ctx.save()/restore() — o alpha
- * 0.3 do contexto nunca vaza para o resto da UI do vídeo.
+ * Scrolling Lyrics com Smooth Scroll Vertical (LERP, estilo Spotify/Apple
+ * Music): a cada frame o smoothActiveIndex persegue o activeIndex real
+ * (`smooth += (target - smooth) * 0.1`), e TODAS as letras vizinhas são
+ * posicionadas pela distância contínua `j - smooth`:
+ *   drawY  = baseY + distance * lyricSpacing  (deslizam juntas para cima)
+ *   alpha  = max(0, 1 - |distance| * 0.7)     (foco 1.0 → vizinhas ~0.3 → 0)
+ *   escala = 0.68 + 0.32 * focus              (cresce ao chegar no foco)
+ * 16:9: alinhado pela DIREITA. 9:16: centralizado entre o selo 'Cantando
+ * Agora' e as barras. Cada bloco tem seu próprio save/restore — a opacidade
+ * nunca vaza para o resto do canvas.
  */
 function drawScrollingLyrics(
   ctx: CanvasRenderingContext2D,
@@ -968,18 +971,28 @@ function drawScrollingLyrics(
   t: number,
   barsTopY: number,
   W: number,
+  states: Map<string, MemberRenderState>,
 ): void {
   const events = lyricEvents(project)
   if (events.length === 0) return
-  const { past, current, next } = lyricContext(events, t)
-  if (!past && !current && !next) return
+
+  // --- Interpolação do índice (LERP por frame) ---
+  const target = lyricTargetIndex(events, t)
+  let smooth = smoothLyricIndexes.get(states)
+  if (!smooth) {
+    smooth = { value: target } // primeira renderização: já nasce no alvo
+    smoothLyricIndexes.set(states, smooth)
+  }
+  // Seek/pulo grande na timeline: snap para não atravessar a tela voando
+  if (Math.abs(target - smooth.value) > 2.5) smooth.value = target
+  else smooth.value += (target - smooth.value) * LYRIC_LERP_FACTOR
 
   const horizontal = project.format === 'horizontal'
   const anchorX = horizontal ? W - 80 : W / 2
   const align: CanvasTextAlign = horizontal ? 'right' : 'center'
   const maxW = horizontal ? W * 0.42 : W - 160
 
-  // baseY (centro da letra ATUAL) e espaçamento vertical entre blocos.
+  // baseY (centro do foco) e espaçamento vertical entre blocos.
   // 9:16: zona livre entre a base da bolha 'Cantando Agora' e as barras.
   const bubbleBottom = headerLayout(project).headerEndY + 92 + 68 + 12
   const baseY = horizontal ? 310 : (bubbleBottom + barsTopY) / 2
@@ -987,59 +1000,29 @@ function drawScrollingLyrics(
     ? 185
     : Math.max(110, Math.min(165, (barsTopY - bubbleBottom) / 2 - 14))
 
-  // Passado (acima) e Futuro (abaixo) — linha única condensada, alpha 0.3
-  if (past) drawContextLyricLine(ctx, past, anchorX, baseY - lyricSpacing, align, maxW, horizontal)
-  if (next) drawContextLyricLine(ctx, next, anchorX, baseY + lyricSpacing, align, maxW, horizontal)
-
-  // Atual — bloco completo (3 camadas) com envelope de transição suave
-  if (current) {
-    const fadeIn = Math.min(1, (t - current.startTime) / LYRIC_TRANSITION_SECS)
-    const fadeOut = Math.min(1, (current.endTime - t) / LYRIC_TRANSITION_SECS)
-    const alpha = Math.max(0, Math.min(fadeIn, fadeOut))
-    const offsetY = (1 - easeOutCubic(fadeIn)) * 15 // slide up na entrada
-    if (alpha > 0.01) {
-      drawCurrentLyricBlock(ctx, current, anchorX, baseY + offsetY, align, maxW, alpha, horizontal)
-    }
+  // --- Renderização dinâmica: vizinhos de activeIndex-1 a activeIndex+2 ---
+  const center = Math.round(smooth.value)
+  for (let j = center - 1; j <= center + 2; j++) {
+    if (j < 0 || j >= events.length) continue
+    const distance = j - smooth.value
+    // Opacidade contínua pela distância: 0 → 1.0 | ±1 → 0.3 | >±1.4 → some
+    const alpha = Math.max(0, 1 - Math.abs(distance) * 0.7)
+    if (alpha < 0.02) continue
+    const drawY = baseY + distance * lyricSpacing
+    // Foco (0..1): controla escala e glow — vizinhas menores e sem brilho
+    const focus = Math.max(0, 1 - Math.abs(distance))
+    const scale = 0.68 + 0.32 * focus
+    drawLyricBlock(ctx, events[j], anchorX, drawY, align, maxW, alpha, horizontal, scale, focus)
   }
 }
 
 /**
- * Linha de contexto (passado/futuro): apenas a camada primária (Hangul →
- * romanização → tradução), condensada em uma linha, escurecida e menor.
+ * Bloco de letra: até 3 camadas (Hangul, romanização, tradução), centrado
+ * verticalmente em cy, com contorno escuro + glow na cor do membro (glow
+ * proporcional ao foco). `scale` encolhe o bloco inteiro ao redor da âncora
+ * via transform — as vizinhas ficam menores e crescem ao entrar no foco.
  */
-function drawContextLyricLine(
-  ctx: CanvasRenderingContext2D,
-  e: LyricEvent,
-  x: number,
-  cy: number,
-  align: CanvasTextAlign,
-  maxW: number,
-  horizontal: boolean,
-): void {
-  const text = e.layers.hangul || e.layers.romanized || e.layers.translation
-  if (!text) return
-  ctx.save()
-  ctx.globalAlpha = CONTEXT_LYRIC_ALPHA
-  ctx.textAlign = align
-  ctx.textBaseline = 'middle'
-  // Escala reduzida em relação à linha atual (56/48 → 38/32)
-  ctx.font = `800 ${horizontal ? 38 : 32}px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'
-  ctx.lineWidth = 6
-  ctx.lineJoin = 'round'
-  ctx.strokeText(text, x, cy, maxW)
-  ctx.fillStyle = '#ffffff'
-  ctx.fillText(text, x, cy, maxW)
-  ctx.restore()
-  ctx.globalAlpha = 1
-}
-
-/**
- * Bloco da letra ATUAL: até 3 camadas (Hangul, romanização, tradução),
- * centralizado verticalmente em cy, com contorno escuro + glow na cor do
- * membro dono do trecho. Quebra em até 2 linhas por camada.
- */
-function drawCurrentLyricBlock(
+function drawLyricBlock(
   ctx: CanvasRenderingContext2D,
   e: LyricEvent,
   x: number,
@@ -1048,6 +1031,8 @@ function drawCurrentLyricBlock(
   maxW: number,
   alpha: number,
   horizontal: boolean,
+  scale: number,
+  focus: number,
 ): void {
   const L = e.layers
   // [texto, fonte, altura de linha, alpha relativo]
@@ -1071,10 +1056,14 @@ function drawCurrentLyricBlock(
   if (rows.length === 0) return
 
   ctx.save()
+  // Escala ao redor da âncora (x, cy): vizinhas encolhem, o foco cresce.
+  // Todo o desenho abaixo acontece em coordenadas locais pós-transform.
+  ctx.translate(x, cy)
+  ctx.scale(scale, scale)
   ctx.textAlign = align
   ctx.textBaseline = 'middle'
 
-  // Altura total (com quebra em até 2 linhas por camada) para centralizar em cy
+  // Altura total (com quebra em até 2 linhas por camada) para centralizar
   const wrapped: Array<{ lines: string[]; font: string; lineH: number; a: number }> = []
   let totalH = 0
   for (const [text, font, lineH, a] of rows) {
@@ -1084,23 +1073,25 @@ function drawCurrentLyricBlock(
     totalH += lines.length * lineH
   }
 
-  let y = cy - totalH / 2
+  let y = -totalH / 2
   for (const row of wrapped) {
     ctx.font = row.font
     for (const line of row.lines) {
       const lineCy = y + row.lineH / 2
       ctx.globalAlpha = alpha * row.a
-      // Glow na cor do membro dono do trecho
-      ctx.shadowColor = e.color
-      ctx.shadowBlur = 26 * alpha
+      // Glow na cor do membro — proporcional ao foco (vizinhas sem brilho)
+      if (focus > 0.05) {
+        ctx.shadowColor = e.color
+        ctx.shadowBlur = 26 * focus
+      }
       // Contorno escuro para legibilidade
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
       ctx.lineWidth = 8
       ctx.lineJoin = 'round'
-      ctx.strokeText(line, x, lineCy, maxW)
+      ctx.strokeText(line, 0, lineCy, maxW)
       ctx.shadowBlur = 0
       ctx.fillStyle = '#ffffff'
-      ctx.fillText(line, x, lineCy, maxW)
+      ctx.fillText(line, 0, lineCy, maxW)
       y += row.lineH
     }
   }
