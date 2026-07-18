@@ -614,6 +614,9 @@ export function drawFrame(
   }
 
   drawVoiceBubble(ctx, project, avatars, states, topY, t, W)
+  // Scrolling Lyrics: independente da bolha — durante silêncio a próxima
+  // letra já fica aguardando na tela (edge case do nextSegment)
+  drawScrollingLyrics(ctx, project, t, topY, W)
   drawAdlibBubble(ctx, project, avatars, states, W)
   drawLeftChatToasts(ctx, project, lastEnd, avatars, t, W)
 }
@@ -753,56 +756,79 @@ function drawAvatarSource(
   ctx.restore()
 }
 
-/** Duração do Fade In / Fade Out das letras (segundos). */
+/** Duração do Fade In / Fade Out da letra ATUAL (segundos). */
 const LYRIC_TRANSITION_SECS = 0.3
+/** Opacidade das linhas de contexto (passado/futuro) do scroll de letras. */
+const CONTEXT_LYRIC_ALPHA = 0.3
+
+/** Um evento de letra na linha do tempo (dueto = evento único). */
+interface LyricEvent {
+  startTime: number
+  endTime: number
+  layers: LyricLayers
+  color: string
+}
 
 /**
- * Envelope de animação das letras: interpolação baseada no currentTime da
- * música em relação a startTime/endTime do segmento ativo.
- * - Fade In  (start → start+0.3s): alpha 0→1 e offsetY +15px→0 (slide up)
- * - Sustentação: alpha 1, offsetY 0
- * - Fade Out (end-0.3s → end): alpha 1→0
- * Com segmentos sobrepostos, vence o de maior alpha (a letra que entra
- * substitui suavemente a que sai).
+ * Linha do tempo de letras: segmentos (não ad-lib) que têm alguma letra,
+ * agrupados por janela de tempo idêntica (dueto vira uma única linha),
+ * ordenados por startTime.
  */
-interface LyricEnvelope {
-  alpha: number
-  offsetY: number
-}
-
-function lyricEnvelope(project: Project, t: number): LyricEnvelope {
-  let best: LyricEnvelope = { alpha: 0, offsetY: 0 }
+function lyricEvents(project: Project): LyricEvent[] {
+  const map = new Map<
+    string,
+    { start: number; end: number; hangul: string[]; rom: string[]; transl: string[]; color?: string }
+  >()
   for (const s of project.segments) {
-    if (s.isAdlib || t < s.startTime || t >= s.endTime) continue
-    const fadeIn = Math.min(1, (t - s.startTime) / LYRIC_TRANSITION_SECS)
-    const fadeOut = Math.min(1, (s.endTime - t) / LYRIC_TRANSITION_SECS)
-    const alpha = Math.max(0, Math.min(fadeIn, fadeOut))
-    if (alpha > best.alpha) {
-      // Slide up só na entrada: +15px → 0 com easing suave
-      best = { alpha, offsetY: (1 - easeOutCubic(fadeIn)) * 15 }
+    if (s.isAdlib) continue
+    const hangul = s.lyricHangul?.trim()
+    // Legado: `lyric` antigo é tratado como romanização
+    const rom = (s.lyricRomanized || s.lyric)?.trim()
+    const transl = s.lyricTranslation?.trim()
+    if (!hangul && !rom && !transl) continue
+    const key = `${s.startTime}|${s.endTime}`
+    let e = map.get(key)
+    if (!e) {
+      e = { start: s.startTime, end: s.endTime, hangul: [], rom: [], transl: [], color: undefined }
+      map.set(key, e)
     }
+    if (hangul && !e.hangul.includes(hangul)) e.hangul.push(hangul)
+    if (rom && !e.rom.includes(rom)) e.rom.push(rom)
+    if (transl && !e.transl.includes(transl)) e.transl.push(transl)
+    if (!e.color) e.color = project.members.find((m) => m.id === s.memberId)?.color
   }
-  return best
+  return [...map.values()]
+    .map((e) => ({
+      startTime: e.start,
+      endTime: e.end,
+      layers: {
+        hangul: e.hangul.join(' / '),
+        romanized: e.rom.join(' / '),
+        translation: e.transl.join(' / '),
+      },
+      color: e.color ?? '#ec4899',
+    }))
+    .sort((a, b) => a.startTime - b.startTime)
 }
 
-/** Letras ativas no instante t, nas três camadas. */
-function activeLyricLayers(project: Project, t: number): {
-  hangul: string
-  romanized: string
-  translation: string
-} {
-  // Mesmo critério do isActive: fim estritamente exclusivo (t < endTime).
-  // Ad-libs ficam fora das letras principais (são vocais de apoio).
-  const active = project.segments.filter(
-    (s) => !s.isAdlib && t >= s.startTime && t < s.endTime,
-  )
-  const uniq = (vals: (string | undefined)[]) => [...new Set(vals.map((v) => v?.trim()).filter(Boolean))] as string[]
-  return {
-    hangul: uniq(active.map((s) => s.lyricHangul)).join(' / '),
-    // Legado: `lyric` antigo é tratado como romanização
-    romanized: uniq(active.map((s) => s.lyricRomanized || s.lyric)).join(' / '),
-    translation: uniq(active.map((s) => s.lyricTranslation)).join(' / '),
+/**
+ * Contexto de scroll (estilo Spotify): acha o ÍNDICE do evento ativo em t →
+ * past = events[index-1], current = events[index], next = events[index+1].
+ * Edge case (silêncio): sem evento ativo, o evento mais próximo no FUTURO
+ * já entra como `next` aguardando na tela, e o anterior segue como `past`.
+ */
+function lyricContext(
+  events: LyricEvent[],
+  t: number,
+): { past?: LyricEvent; current?: LyricEvent; next?: LyricEvent } {
+  const index = events.findIndex((e) => t >= e.startTime && t < e.endTime)
+  if (index >= 0) {
+    return { past: events[index - 1], current: events[index], next: events[index + 1] }
   }
+  const ni = events.findIndex((e) => e.startTime > t)
+  if (ni >= 0) return { past: events[ni - 1], next: events[ni] }
+  // A música já passou da última letra: ela permanece como passado
+  return { past: events[events.length - 1] }
 }
 
 /**
@@ -829,9 +855,6 @@ function drawVoiceBubble(
   // Opacidade/escala da bolha = maior glow entre os cantores (pop suave)
   const a = Math.min(1, Math.max(...singers.map((m) => states.get(m.id)!.glow)))
   const scale = (0.86 + 0.14 * a) * fmtScale
-
-  const layers = activeLyricLayers(project, t)
-  const hasLyric = !!(layers.hangul || layers.romanized || layers.translation)
 
   const headerEndY = headerLayout(project).headerEndY
   const { H } = videoDims(project.format)
@@ -921,87 +944,6 @@ function drawVoiceBubble(
   ctx.textBaseline = 'alphabetic'
   ctx.restore()
 
-  // --- Letras sincronizadas em camadas (estilo K-pop edit) ---
-  // 9:16: abaixo da bolha, centralizadas (como sempre).
-  // 16:9: bloco dedicado no lado DIREITO da tela, alinhado pela direita —
-  // espelha o bloco de informações que agora vive no lado esquerdo.
-  // Fade In + Slide Up na entrada e Fade Out na saída (envelope 0.3s),
-  // aplicados APENAS ao bloco de texto — save/restore garante que barras,
-  // avatares e a própria bolha nunca herdam a transparência.
-  if (hasLyric) {
-    const env = lyricEnvelope(project, t)
-    if (env.alpha > 0.01) {
-      ctx.save()
-      ctx.translate(0, env.offsetY)
-      if (horizontal) {
-        drawLyricLayersRight(ctx, layers, mainColor, a * env.alpha, W)
-      } else {
-        drawLyricLayers(
-          ctx,
-          layers,
-          mainColor,
-          bubbleCy + (cardH * fmtScale) / 2 + 26,
-          barsTopY,
-          a * env.alpha,
-          W,
-        )
-      }
-      ctx.restore()
-      ctx.globalAlpha = 1
-    }
-  }
-}
-
-/**
- * Letras no 16:9: bloco alinhado pela DIREITA (textAlign right) no terço
- * direito superior da tela, com fontes maiores que no vertical. Espelha o
- * bloco de informações da esquerda, ocupando o espaço vazio do widescreen.
- */
-function drawLyricLayersRight(
-  ctx: CanvasRenderingContext2D,
-  layers: LyricLayers,
-  color: string,
-  alpha: number,
-  W: number,
-): void {
-  const rightX = W - 80 // borda direita com margem
-  const maxW = W * 0.42
-  // [texto, fonte, altura de linha, alpha] — fontes ~15% maiores no 16:9
-  const rows: Array<[string, string, number, number]> = []
-  if (layers.hangul)
-    rows.push([layers.hangul, `800 56px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`, 70, 1])
-  if (layers.romanized) rows.push([layers.romanized, '800 48px Outfit, sans-serif', 62, 1])
-  if (layers.translation) rows.push([layers.translation, 'italic 500 34px Outfit, sans-serif', 46, 0.75])
-  if (rows.length === 0) return
-
-  ctx.save()
-  ctx.textAlign = 'right'
-  ctx.textBaseline = 'middle'
-
-  // Bloco começa no topo direito (alinhado ao rótulo do header à esquerda)
-  let y = 150
-  for (const [text, font, lineH, a] of rows) {
-    ctx.font = font
-    const lines = wrapText(ctx, text, maxW, 2)
-    for (const line of lines) {
-      const cy = y + lineH / 2
-      ctx.globalAlpha = alpha * a
-      ctx.shadowColor = color
-      ctx.shadowBlur = 26 * alpha
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
-      ctx.lineWidth = 8
-      ctx.lineJoin = 'round'
-      ctx.strokeText(line, rightX, cy, maxW)
-      ctx.shadowBlur = 0
-      ctx.fillStyle = '#ffffff'
-      ctx.fillText(line, rightX, cy, maxW)
-      y += lineH
-    }
-  }
-
-  ctx.restore()
-  ctx.textAlign = 'left'
-  ctx.textBaseline = 'alphabetic'
 }
 
 interface LyricLayers {
@@ -1011,32 +953,128 @@ interface LyricLayers {
 }
 
 /**
- * Letras em até 3 camadas: Hangul (grande), romanização (média) e tradução
- * (menor, itálica). Cada linha tem contorno escuro + glow na cor do membro.
+ * Scrolling Lyrics (estilo Spotify/Apple Music): três posições no eixo Y —
+ *   passado  em baseY - lyricSpacing (alpha 0.3, fonte reduzida)
+ *   ATUAL    em baseY               (alpha 1.0 + Fade In/Out + Slide Up)
+ *   futuro   em baseY + lyricSpacing (alpha 0.3, fonte reduzida)
+ * 16:9: bloco alinhado pela DIREITA no terço direito. 9:16: centralizado
+ * entre o selo 'Cantando Agora' e a zona das barras/visualizador.
+ * Cada bloco é desenhado dentro do próprio ctx.save()/restore() — o alpha
+ * 0.3 do contexto nunca vaza para o resto da UI do vídeo.
  */
-function drawLyricLayers(
+function drawScrollingLyrics(
   ctx: CanvasRenderingContext2D,
-  layers: LyricLayers,
-  color: string,
-  topY: number,
-  maxY: number,
-  alpha: number,
+  project: Project,
+  t: number,
+  barsTopY: number,
   W: number,
 ): void {
-  const maxW = W - 160
-  // [texto, fonte, altura de linha, alpha]
+  const events = lyricEvents(project)
+  if (events.length === 0) return
+  const { past, current, next } = lyricContext(events, t)
+  if (!past && !current && !next) return
+
+  const horizontal = project.format === 'horizontal'
+  const anchorX = horizontal ? W - 80 : W / 2
+  const align: CanvasTextAlign = horizontal ? 'right' : 'center'
+  const maxW = horizontal ? W * 0.42 : W - 160
+
+  // baseY (centro da letra ATUAL) e espaçamento vertical entre blocos.
+  // 9:16: zona livre entre a base da bolha 'Cantando Agora' e as barras.
+  const bubbleBottom = headerLayout(project).headerEndY + 92 + 68 + 12
+  const baseY = horizontal ? 310 : (bubbleBottom + barsTopY) / 2
+  const lyricSpacing = horizontal
+    ? 185
+    : Math.max(110, Math.min(165, (barsTopY - bubbleBottom) / 2 - 14))
+
+  // Passado (acima) e Futuro (abaixo) — linha única condensada, alpha 0.3
+  if (past) drawContextLyricLine(ctx, past, anchorX, baseY - lyricSpacing, align, maxW, horizontal)
+  if (next) drawContextLyricLine(ctx, next, anchorX, baseY + lyricSpacing, align, maxW, horizontal)
+
+  // Atual — bloco completo (3 camadas) com envelope de transição suave
+  if (current) {
+    const fadeIn = Math.min(1, (t - current.startTime) / LYRIC_TRANSITION_SECS)
+    const fadeOut = Math.min(1, (current.endTime - t) / LYRIC_TRANSITION_SECS)
+    const alpha = Math.max(0, Math.min(fadeIn, fadeOut))
+    const offsetY = (1 - easeOutCubic(fadeIn)) * 15 // slide up na entrada
+    if (alpha > 0.01) {
+      drawCurrentLyricBlock(ctx, current, anchorX, baseY + offsetY, align, maxW, alpha, horizontal)
+    }
+  }
+}
+
+/**
+ * Linha de contexto (passado/futuro): apenas a camada primária (Hangul →
+ * romanização → tradução), condensada em uma linha, escurecida e menor.
+ */
+function drawContextLyricLine(
+  ctx: CanvasRenderingContext2D,
+  e: LyricEvent,
+  x: number,
+  cy: number,
+  align: CanvasTextAlign,
+  maxW: number,
+  horizontal: boolean,
+): void {
+  const text = e.layers.hangul || e.layers.romanized || e.layers.translation
+  if (!text) return
+  ctx.save()
+  ctx.globalAlpha = CONTEXT_LYRIC_ALPHA
+  ctx.textAlign = align
+  ctx.textBaseline = 'middle'
+  // Escala reduzida em relação à linha atual (56/48 → 38/32)
+  ctx.font = `800 ${horizontal ? 38 : 32}px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'
+  ctx.lineWidth = 6
+  ctx.lineJoin = 'round'
+  ctx.strokeText(text, x, cy, maxW)
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(text, x, cy, maxW)
+  ctx.restore()
+  ctx.globalAlpha = 1
+}
+
+/**
+ * Bloco da letra ATUAL: até 3 camadas (Hangul, romanização, tradução),
+ * centralizado verticalmente em cy, com contorno escuro + glow na cor do
+ * membro dono do trecho. Quebra em até 2 linhas por camada.
+ */
+function drawCurrentLyricBlock(
+  ctx: CanvasRenderingContext2D,
+  e: LyricEvent,
+  x: number,
+  cy: number,
+  align: CanvasTextAlign,
+  maxW: number,
+  alpha: number,
+  horizontal: boolean,
+): void {
+  const L = e.layers
+  // [texto, fonte, altura de linha, alpha relativo]
   const rows: Array<[string, string, number, number]> = []
-  if (layers.hangul)
-    rows.push([layers.hangul, `800 48px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`, 60, 1])
-  if (layers.romanized) rows.push([layers.romanized, '800 42px Outfit, sans-serif', 54, 1])
-  if (layers.translation) rows.push([layers.translation, 'italic 500 30px Outfit, sans-serif', 42, 0.75])
+  if (L.hangul)
+    rows.push([
+      L.hangul,
+      `800 ${horizontal ? 56 : 48}px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`,
+      horizontal ? 70 : 60,
+      1,
+    ])
+  if (L.romanized)
+    rows.push([L.romanized, `800 ${horizontal ? 48 : 42}px Outfit, sans-serif`, horizontal ? 62 : 54, 1])
+  if (L.translation)
+    rows.push([
+      L.translation,
+      `italic 500 ${horizontal ? 34 : 30}px Outfit, sans-serif`,
+      horizontal ? 46 : 42,
+      0.75,
+    ])
   if (rows.length === 0) return
 
   ctx.save()
-  ctx.textAlign = 'center'
+  ctx.textAlign = align
   ctx.textBaseline = 'middle'
 
-  // Calcula altura total (com quebra em até 2 linhas por camada)
+  // Altura total (com quebra em até 2 linhas por camada) para centralizar em cy
   const wrapped: Array<{ lines: string[]; font: string; lineH: number; a: number }> = []
   let totalH = 0
   for (const [text, font, lineH, a] of rows) {
@@ -1046,31 +1084,29 @@ function drawLyricLayers(
     totalH += lines.length * lineH
   }
 
-  let y = topY + 30
-  // Garante que o bloco não invade as barras
-  if (y + totalH > maxY - 8) y = Math.max(topY - 20, maxY - 8 - totalH)
-
+  let y = cy - totalH / 2
   for (const row of wrapped) {
     ctx.font = row.font
     for (const line of row.lines) {
-      const cy = y + row.lineH / 2
+      const lineCy = y + row.lineH / 2
       ctx.globalAlpha = alpha * row.a
-      // Glow na cor do membro
-      ctx.shadowColor = color
+      // Glow na cor do membro dono do trecho
+      ctx.shadowColor = e.color
       ctx.shadowBlur = 26 * alpha
       // Contorno escuro para legibilidade
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
       ctx.lineWidth = 8
       ctx.lineJoin = 'round'
-      ctx.strokeText(line, W / 2, cy, maxW)
+      ctx.strokeText(line, x, lineCy, maxW)
       ctx.shadowBlur = 0
       ctx.fillStyle = '#ffffff'
-      ctx.fillText(line, W / 2, cy, maxW)
+      ctx.fillText(line, x, lineCy, maxW)
       y += row.lineH
     }
   }
 
   ctx.restore()
+  ctx.globalAlpha = 1
 }
 
 /** Quebra texto por palavras em até maxLines linhas. */
