@@ -772,18 +772,20 @@ interface LyricEvent {
   startTime: number
   endTime: number
   layers: LyricLayers
-  color: string
+  /** Cores únicas dos membros ativos no evento (ordem de aparição). */
+  colors: string[]
 }
 
 /**
  * Linha do tempo de letras: segmentos (não ad-lib) que têm alguma letra,
  * agrupados por janela de tempo idêntica (dueto vira uma única linha),
- * ordenados por startTime.
+ * ordenados por startTime. `colors` acumula as cores de TODOS os membros
+ * do evento, sem duplicatas — 1 cor = sólida, 2+ = gradiente no foco.
  */
 function lyricEvents(project: Project): LyricEvent[] {
   const map = new Map<
     string,
-    { start: number; end: number; hangul: string[]; rom: string[]; transl: string[]; color?: string }
+    { start: number; end: number; hangul: string[]; rom: string[]; transl: string[]; colors: string[] }
   >()
   for (const s of project.segments) {
     if (s.isAdlib) continue
@@ -795,13 +797,14 @@ function lyricEvents(project: Project): LyricEvent[] {
     const key = `${s.startTime}|${s.endTime}`
     let e = map.get(key)
     if (!e) {
-      e = { start: s.startTime, end: s.endTime, hangul: [], rom: [], transl: [], color: undefined }
+      e = { start: s.startTime, end: s.endTime, hangul: [], rom: [], transl: [], colors: [] }
       map.set(key, e)
     }
     if (hangul && !e.hangul.includes(hangul)) e.hangul.push(hangul)
     if (rom && !e.rom.includes(rom)) e.rom.push(rom)
     if (transl && !e.transl.includes(transl)) e.transl.push(transl)
-    if (!e.color) e.color = project.members.find((m) => m.id === s.memberId)?.color
+    const color = project.members.find((m) => m.id === s.memberId)?.color
+    if (color && !e.colors.includes(color)) e.colors.push(color)
   }
   return [...map.values()]
     .map((e) => ({
@@ -812,7 +815,7 @@ function lyricEvents(project: Project): LyricEvent[] {
         romanized: e.rom.join(' / '),
         translation: e.transl.join(' / '),
       },
-      color: e.color ?? '#ec4899',
+      colors: e.colors.length > 0 ? e.colors : ['#ec4899'],
     }))
     .sort((a, b) => a.startTime - b.startTime)
 }
@@ -1066,11 +1069,36 @@ function drawLyricBlock(
   // Altura total (com quebra em até 2 linhas por camada) para centralizar
   const wrapped: Array<{ lines: string[]; font: string; lineH: number; a: number }> = []
   let totalH = 0
+  let maxLineW = 0
   for (const [text, font, lineH, a] of rows) {
     ctx.font = font
     const lines = wrapText(ctx, text, maxW, 2)
+    for (const line of lines) maxLineW = Math.max(maxLineW, ctx.measureText(line).width)
     wrapped.push({ lines, font, lineH, a })
     totalH += lines.length * lineH
+  }
+
+  // --- Cores Dinâmicas: exclusivas da letra EM FOCO (focus > 0.5) ---
+  // Passado/futuro (subindo/descendo) permanecem SEMPRE brancos, apenas
+  // com a opacidade reduzida. Em coordenadas locais a âncora é x=0:
+  //   center → texto vai de -maxLineW/2 a +maxLineW/2
+  //   right  → texto vai de -maxLineW a 0
+  const inFocus = focus > 0.5
+  let focusFill: string | CanvasGradient = '#ffffff'
+  if (inFocus) {
+    const colors = e.colors
+    if (colors.length === 1) {
+      focusFill = colors[0] // cor sólida do membro
+    } else {
+      const halfW = Math.max(1, maxLineW) / 2
+      const gradient =
+        align === 'right'
+          ? ctx.createLinearGradient(-halfW * 2, 0, 0, 0)
+          : ctx.createLinearGradient(-halfW, 0, halfW, 0)
+      // Divisão igual do espaço entre as cores: 2 → 0/1; 3 → 0/0.5/1...
+      colors.forEach((c, i) => gradient.addColorStop(i / (colors.length - 1), c))
+      focusFill = gradient
+    }
   }
 
   let y = -totalH / 2
@@ -1081,7 +1109,7 @@ function drawLyricBlock(
       ctx.globalAlpha = alpha * row.a
       // Glow na cor do membro — proporcional ao foco (vizinhas sem brilho)
       if (focus > 0.05) {
-        ctx.shadowColor = e.color
+        ctx.shadowColor = e.colors[0]
         ctx.shadowBlur = 26 * focus
       }
       // Contorno escuro para legibilidade
@@ -1090,12 +1118,13 @@ function drawLyricBlock(
       ctx.lineJoin = 'round'
       ctx.strokeText(line, 0, lineCy, maxW)
       ctx.shadowBlur = 0
-      ctx.fillStyle = '#ffffff'
+      ctx.fillStyle = focusFill
       ctx.fillText(line, 0, lineCy, maxW)
       y += row.lineH
     }
   }
 
+  // restore devolve fillStyle/transform/alpha ao estado anterior ao bloco
   ctx.restore()
   ctx.globalAlpha = 1
 }
