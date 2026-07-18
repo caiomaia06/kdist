@@ -1,11 +1,13 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
-import { Archivo_Black, Outfit, Playfair_Display, Unbounded } from 'next/font/google'
+import { Archivo_Black, Inter, Outfit, Playfair_Display, Unbounded } from 'next/font/google'
 import './globals.css'
 
 const _outfit = Outfit({ subsets: ['latin'] })
 // Fonte display usada no título do vídeo (canvas) — precisa estar carregada na página
 const _unbounded = Unbounded({ subsets: ['latin'], weight: ['600', '800'] })
+// Fonte da opção 'Sans-Serif Moderna' da aba Design (canvas)
+const _inter = Inter({ subsets: ['latin'] })
 // Fontes dos Temas de Interface: serifada delicada (Photocard) e pesada (Comeback)
 const playfair = Playfair_Display({ subsets: ['latin'], variable: '--font-playfair' })
 const archivoBlack = Archivo_Black({

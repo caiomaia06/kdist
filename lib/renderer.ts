@@ -7,10 +7,84 @@ import {
   grayscaleImage,
   hasLeftChat,
 } from './left-chat'
-import type { Project, VideoFormat } from './types'
+import { DEFAULT_DESIGN, type DesignSettings, type Project, type VideoFormat } from './types'
 
 export const VIDEO_W = 1080
 export const VIDEO_H = 1920
+
+// ---------- Motor de Customização (designSettings da aba Design) ----------
+
+/** Configuração efetiva: padrões + overrides do projeto. */
+export function designOf(project: Project): DesignSettings {
+  return { ...DEFAULT_DESIGN, ...project.design }
+}
+
+/** Pilhas de fontes por opção (famílias carregadas no layout ou do sistema). */
+const FONT_STACKS: Record<DesignSettings['font'], { body: string; display: string }> = {
+  default: {
+    body: 'Outfit, sans-serif',
+    display: 'Unbounded, Outfit, sans-serif',
+  },
+  sans: {
+    body: "Inter, 'Segoe UI', system-ui, sans-serif",
+    display: "Inter, 'Segoe UI', system-ui, sans-serif",
+  },
+  serif: {
+    body: "'Playfair Display', Georgia, 'Times New Roman', serif",
+    display: "'Playfair Display', Georgia, 'Times New Roman', serif",
+  },
+  impact: {
+    body: "Impact, 'Arial Black', 'Haettenschweiler', sans-serif",
+    display: "Impact, 'Arial Black', 'Haettenschweiler', sans-serif",
+  },
+  mono: {
+    body: "'Courier New', ui-monospace, monospace",
+    display: "'Courier New', ui-monospace, monospace",
+  },
+}
+
+// Variáveis de tipografia usadas em TODOS os ctx.font do renderer.
+// São atualizadas por applyDesign() no início de cada frame — o mesmo
+// desenho serve preview e export, sempre com o design do projeto atual.
+let FONT_BODY = FONT_STACKS.default.body
+let FONT_DISPLAY = FONT_STACKS.default.display
+let FONT_KR = `Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`
+let DESIGN: DesignSettings = DEFAULT_DESIGN
+
+function applyDesign(project: Project): void {
+  DESIGN = designOf(project)
+  const stack = FONT_STACKS[DESIGN.font] ?? FONT_STACKS.default
+  FONT_BODY = stack.body
+  FONT_DISPLAY = stack.display
+  // Coreano: mantém fallbacks CJK em qualquer fonte escolhida
+  FONT_KR = `${stack.body.split(',')[0]}, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`
+}
+
+/** Multiplicador de espessura das barras: 1→0.5x … 5→1x … 10→1.6x. */
+function barThicknessMul(): number {
+  const t = Math.max(1, Math.min(10, DESIGN.barThickness))
+  return t <= 5 ? 0.5 + (t - 1) * 0.125 : 1 + (t - 5) * 0.12
+}
+
+/**
+ * Traça o caminho da máscara do avatar conforme o formato escolhido:
+ * círculo (arc), quadrado arredondado (roundRect r*0.36) ou afiado (r*0.12).
+ * Usado tanto para o clip da foto quanto para o anel colorido atrás.
+ */
+function traceAvatarPath(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+): void {
+  ctx.beginPath()
+  if (DESIGN.avatarShape === 'circle') {
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  } else {
+    const radius = DESIGN.avatarShape === 'rounded' ? r * 0.36 : r * 0.12
+    ctx.roundRect(cx - r, cy - r, r * 2, r * 2, radius)
+  }
+}
 
 /** Dimensões do vídeo conforme o formato do projeto. */
 export function videoDims(format?: VideoFormat): { W: number; H: number } {
@@ -113,7 +187,8 @@ interface HeaderLayout {
 
 function headerLayout(project: Project): HeaderLayout {
   const horizontal = project.format === 'horizontal'
-  const hasCover = !!project.coverImage
+  // Toggle 'Mostrar Capa do Álbum': desligado = layout sem capa
+  const hasCover = !!project.coverImage && DESIGN.showCover
   if (horizontal) {
     // 16:9: header ~25% maior para ocupar melhor a largura do palco
     return hasCover
@@ -154,6 +229,7 @@ export function buildBackgroundCache(
   project: Project,
   coverImg: HTMLImageElement | null,
 ): HTMLCanvasElement {
+  applyDesign(project) // showCover/headerLayout dependem do design atual
   const { W, H } = videoDims(project.format)
   const canvas = document.createElement('canvas')
   canvas.width = W
@@ -180,10 +256,12 @@ export function buildBackgroundCache(
   ctx.fillStyle = 'rgba(6, 5, 12, 0.72)'
   ctx.fillRect(0, 0, W, H)
 
-  // Capa nítida pequena no topo (se existir)
-  if (coverImg) {
+  // Capa nítida pequena no topo (se existir e o toggle permitir)
+  // 16:9: o bloco de informações vive no terço ESQUERDO (centrado em W*0.18);
+  // 9:16 permanece centralizado como sempre foi.
+  if (coverImg && DESIGN.showCover) {
     const { coverSize, coverCy } = headerLayout(project)
-    const cx = W / 2
+    const cx = project.format === 'horizontal' ? W * 0.18 : W / 2
     ctx.save()
     ctx.beginPath()
     ctx.roundRect(cx - coverSize / 2, coverCy - coverSize / 2, coverSize, coverSize, 24)
@@ -255,28 +333,36 @@ function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: numb
   const p = easeOutCubic(Math.min(1, t / 1.1)) // 0→1 em 1.1s
   const rise = (1 - p) * 46
 
+  // 16:9: bloco de informações contido no terço ESQUERDO da tela (centrado
+  // em W*0.18, alinhado à capa). 9:16: centralizado, como sempre.
+  const cx = horizontal ? W * 0.18 : W / 2
+  const maxTitleW = horizontal ? W * 0.34 : W - 120
+  const maxArtistW = horizontal ? W * 0.34 : W - 160
+
   ctx.save()
   ctx.textAlign = 'center'
 
-  // Rótulo com tracking largo (16:9: +25% de escala)
-  ctx.globalAlpha = Math.min(1, p * 1.2) * 0.55
-  ctx.fillStyle = '#ffffff'
-  ctx.font = `600 ${horizontal ? 32 : 26}px Unbounded, Outfit, sans-serif`
-  ctx.fillText('L I N E   D I S T R I B U T I O N', W / 2, hl.labelY + rise * 0.5)
+  // Rótulo com tracking largo (toggle 'Mostrar texto Line Distribution')
+  if (DESIGN.showLabel) {
+    ctx.globalAlpha = Math.min(1, p * 1.2) * 0.55
+    ctx.fillStyle = '#ffffff'
+    ctx.font = `600 ${horizontal ? 24 : 26}px ${FONT_DISPLAY}`
+    ctx.fillText('L I N E   D I S T R I B U T I O N', cx, hl.labelY + rise * 0.5, maxTitleW)
+  }
 
   // Título em fonte display com glow rosa sutil
   ctx.globalAlpha = p
   ctx.shadowColor = 'rgba(236, 72, 153, 0.55)'
   ctx.shadowBlur = 30 * p
   ctx.fillStyle = '#ffffff'
-  ctx.font = `800 ${hl.titleFont}px Unbounded, Outfit, sans-serif`
-  ctx.fillText(project.title || 'Sem título', W / 2, hl.titleY + rise, W - 120)
+  ctx.font = `800 ${horizontal ? 56 : hl.titleFont}px ${FONT_DISPLAY}`
+  ctx.fillText(project.title || 'Sem título', cx, hl.titleY + rise, maxTitleW)
   ctx.shadowBlur = 0
 
-  // Artista (nome do grupo — 16:9: +25% de escala)
+  // Artista (nome do grupo)
   ctx.globalAlpha = p * 0.7
-  ctx.font = `500 ${horizontal ? 48 : 38}px Outfit, sans-serif`
-  ctx.fillText(project.artist || '', W / 2, hl.artistY + rise, W - 160)
+  ctx.font = `500 ${horizontal ? 40 : 38}px ${FONT_BODY}`
+  ctx.fillText(project.artist || '', cx, hl.artistY + rise, maxArtistW)
 
   ctx.restore()
   ctx.textAlign = 'left'
@@ -299,6 +385,7 @@ export function drawVideoFrame(
   audioDur: number,
   freq?: Uint8Array,
 ): void {
+  applyDesign(project) // tipografia/estilos da aba Design valem para o frame inteiro
   const { W, H } = videoDims(project.format)
   const state = videoStateAt(project, vt, audioDur)
   const { introDur, mainDur, rankingDur } = videoTiming(project, audioDur)
@@ -356,14 +443,14 @@ function drawIntroScreen(
   // Nome do grupo (fonte menor, tracking largo)
   ctx.globalAlpha = a * 0.7
   ctx.fillStyle = '#ffffff'
-  ctx.font = `600 ${horizontal ? 34 : 40}px Outfit, sans-serif`
+  ctx.font = `600 ${horizontal ? 34 : 40}px ${FONT_BODY}`
   ctx.fillText((project.artist || '').toUpperCase(), W / 2, cy - (horizontal ? 64 : 80) + rise, W - 160)
 
   // Título da música (fonte maior, negrito, glow rosa)
   ctx.globalAlpha = a
   ctx.shadowColor = 'rgba(236, 72, 153, 0.55)'
   ctx.shadowBlur = 34 * a
-  ctx.font = `800 ${horizontal ? 72 : 84}px Unbounded, Outfit, sans-serif`
+  ctx.font = `800 ${horizontal ? 72 : 84}px ${FONT_DISPLAY}`
   ctx.fillText(project.title || 'Sem título', W / 2, cy + (horizontal ? 16 : 20) + rise, W - 140)
   ctx.shadowBlur = 0
 
@@ -411,13 +498,13 @@ function drawOutroScreen(
   ctx.shadowColor = 'rgba(236, 72, 153, 0.5)'
   ctx.shadowBlur = 28 * a
   const horizontal = project.format === 'horizontal'
-  ctx.font = `800 ${horizontal ? 56 : 64}px Unbounded, Outfit, sans-serif`
+  ctx.font = `800 ${horizontal ? 56 : 64}px ${FONT_DISPLAY}`
   ctx.fillText(project.outroText?.trim() || DEFAULT_OUTRO_TEXT, W / 2, H / 2 + rise, W - 160)
   ctx.shadowBlur = 0
 
   // Crédito sutil com o nome da música
   ctx.globalAlpha = a * 0.45
-  ctx.font = '500 30px Outfit, sans-serif'
+  ctx.font = `500 30px ${FONT_BODY}`
   ctx.fillText(
     [project.artist, project.title].filter(Boolean).join(' — '),
     W / 2,
@@ -494,10 +581,13 @@ export function drawFrame(
   const r = Math.max(horizontal ? 24 : 38, Math.min(62, rowH * 0.32)) // raio do avatar
   const avatarCx = 90 + r
   const barX = avatarCx + r + 28
-  // 16:9: barras ~20% mais grossas (18→22 mín, fração 0.24→0.28)
-  const barH = horizontal
+  // 16:9: barras ~20% mais grossas (18→22 mín, fração 0.24→0.28).
+  // O slider 'Espessura das Barras' (1..10) multiplica a altura base
+  // (0.5x fina → 1x média → 1.6x grossa), com teto para não invadir a linha.
+  const baseBarH = horizontal
     ? Math.max(22, Math.min(46, rowH * 0.28))
     : Math.max(26, Math.min(40, rowH * 0.24))
+  const barH = Math.max(10, Math.min(rowH * 0.5, baseBarH * barThicknessMul()))
   const maxBarW = W - barX - 200
   const nameFont = horizontal ? 30 : 34
   const timeFont = horizontal ? 27 : 30
@@ -555,8 +645,7 @@ export function drawFrame(
       ctx.shadowBlur = 24 * glow
     }
     ctx.fillStyle = ringColor
-    ctx.beginPath()
-    ctx.arc(avatarCx, cy, r + 5, 0, Math.PI * 2)
+    traceAvatarPath(ctx, avatarCx, cy, r + 5)
     ctx.fill()
     ctx.shadowBlur = 0 // reset imediato para não vazar o brilho
 
@@ -582,7 +671,7 @@ export function drawFrame(
 
     // --- Nome ---
     ctx.fillStyle = '#ffffff'
-    ctx.font = `600 ${nameFont}px Outfit, sans-serif`
+    ctx.font = `600 ${nameFont}px ${FONT_BODY}`
     ctx.fillText(m.name, barX + 4, cy - barH / 2 - 12, maxBarW)
 
     // --- Barra pílula (recebe o neon) ---
@@ -597,15 +686,21 @@ export function drawFrame(
     ctx.fill()
     ctx.shadowBlur = 0 // reset imediato
 
-    // --- Tempo cantado ---
-    ctx.fillStyle = 'rgba(255,255,255,0.9)'
-    ctx.font = `600 ${timeFont}px Outfit, sans-serif`
-    ctx.fillText(`${(sung.get(m.id) ?? 0).toFixed(1)}s`, barX + w + 18, cy + barH / 2)
+    // --- Tempo cantado (toggle 'Mostrar tempo em números') ---
+    if (DESIGN.showTimes) {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'
+      ctx.font = `600 ${timeFont}px ${FONT_BODY}`
+      ctx.fillText(`${(sung.get(m.id) ?? 0).toFixed(1)}s`, barX + w + 18, cy + barH / 2)
+    }
 
     ctx.globalAlpha = 1
   }
 
   drawVoiceBubble(ctx, project, avatars, states, topY, t, W)
+  // Scrolling Lyrics: independente da bolha — durante silêncio a próxima
+  // letra já fica aguardando na tela. `states` identifica a sessão de
+  // renderização para o smoothActiveIndex (LERP) do scroll.
+  drawScrollingLyrics(ctx, project, t, topY, W, states)
   drawAdlibBubble(ctx, project, avatars, states, W)
   drawLeftChatToasts(ctx, project, lastEnd, avatars, t, W)
 }
@@ -636,9 +731,9 @@ function drawAdlibBubble(
   const overlap = r * 0.75
   const avatarsW = r * 2 + (singers.length - 1) * overlap
   const names = singers.map((m) => m.name).join(' + ')
-  ctx.font = '700 24px Outfit, sans-serif'
+  ctx.font = `700 24px ${FONT_BODY}`
   const namesW = Math.min(ctx.measureText(names).width, 300)
-  ctx.font = '700 15px Outfit, sans-serif'
+  ctx.font = `700 15px ${FONT_BODY}`
   const labelW = ctx.measureText('AD-LIB ♪').width
   const textAreaW = Math.max(namesW, labelW)
   const padX = 22
@@ -647,10 +742,13 @@ function drawAdlibBubble(
   const cardW = padX + avatarsW + gap + textAreaW + padX
   const mainColor = singers[0].color
 
-  // Ancorado no canto superior direito, abaixo do cabeçalho
+  // 9:16: canto superior direito, abaixo do cabeçalho (como sempre).
+  // 16:9: canto ESQUERDO abaixo do bloco de informações — o lado direito
+  // agora pertence ao bloco de letras alinhado à direita.
   const headerEndY = headerLayout(project).headerEndY
-  const cx = W - 60 - cardW / 2
-  const cy = headerEndY + 24
+  const horizontal = project.format === 'horizontal'
+  const cx = horizontal ? 60 + cardW / 2 : W - 60 - cardW / 2
+  const cy = headerEndY + (horizontal ? 70 : 24)
 
   ctx.save()
   ctx.globalAlpha = a
@@ -677,8 +775,7 @@ function drawAdlibBubble(
     const m = singers[i]
     const acx = x0 + padX + r + i * overlap
     ctx.fillStyle = m.color
-    ctx.beginPath()
-    ctx.arc(acx, 0, r + 3, 0, Math.PI * 2)
+    traceAvatarPath(ctx, acx, 0, r + 3)
     ctx.fill()
     drawAvatar(ctx, avatars.get(m.id), m.name, acx, 0, r)
   }
@@ -688,10 +785,10 @@ function drawAdlibBubble(
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   ctx.fillStyle = mainColor
-  ctx.font = '700 15px Outfit, sans-serif'
+  ctx.font = `700 15px ${FONT_BODY}`
   ctx.fillText('AD-LIB ♪', textX, -20)
   ctx.fillStyle = 'rgba(255,255,255,0.92)'
-  ctx.font = '700 24px Outfit, sans-serif'
+  ctx.font = `700 24px ${FONT_BODY}`
   ctx.fillText(names, textX, 10, textAreaW)
   ctx.textBaseline = 'alphabetic'
   ctx.restore()
@@ -707,8 +804,8 @@ function drawAvatar(
   r: number,
 ): void {
   ctx.save()
-  ctx.beginPath()
-  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  // Máscara conforme o 'Formato do Avatar' da aba Design
+  traceAvatarPath(ctx, cx, cy, r)
   ctx.clip()
   if (img) {
     ctx.drawImage(img, cx - r, cy - r, r * 2, r * 2)
@@ -716,7 +813,7 @@ function drawAvatar(
     ctx.fillStyle = '#1d1928'
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2)
     ctx.fillStyle = '#ffffff'
-    ctx.font = `700 ${Math.round(r * 0.9)}px Outfit, sans-serif`
+    ctx.font = `700 ${Math.round(r * 0.9)}px ${FONT_BODY}`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText((name[0] || '?').toUpperCase(), cx, cy + 2)
@@ -735,31 +832,88 @@ function drawAvatarSource(
   r: number,
 ): void {
   ctx.save()
-  ctx.beginPath()
-  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  traceAvatarPath(ctx, cx, cy, r)
   ctx.clip()
   ctx.drawImage(source, cx - r, cy - r, r * 2, r * 2)
   ctx.restore()
 }
 
-/** Letras ativas no instante t, nas três camadas. */
-function activeLyricLayers(project: Project, t: number): {
-  hangul: string
-  romanized: string
-  translation: string
-} {
-  // Mesmo critério do isActive: fim estritamente exclusivo (t < endTime).
-  // Ad-libs ficam fora das letras principais (são vocais de apoio).
-  const active = project.segments.filter(
-    (s) => !s.isAdlib && t >= s.startTime && t < s.endTime,
-  )
-  const uniq = (vals: (string | undefined)[]) => [...new Set(vals.map((v) => v?.trim()).filter(Boolean))] as string[]
-  return {
-    hangul: uniq(active.map((s) => s.lyricHangul)).join(' / '),
+/** Fator de interpolação do scroll de letras (0.1 = deslize suave). */
+const LYRIC_LERP_FACTOR = 0.1
+
+/**
+ * smoothActiveIndex por SESSÃO de renderização, keyed pelo Map de estados
+ * que preview e export já possuem separadamente — o scroll do preview nunca
+ * vaza para o export e vice-versa. WeakMap libera a memória junto da sessão.
+ */
+const smoothLyricIndexes = new WeakMap<Map<string, MemberRenderState>, { value: number }>()
+
+/** Um evento de letra na linha do tempo (dueto = evento único). */
+interface LyricEvent {
+  startTime: number
+  endTime: number
+  layers: LyricLayers
+  /** Cores únicas dos membros ativos no evento (ordem de aparição). */
+  colors: string[]
+}
+
+/**
+ * Linha do tempo de letras: segmentos (não ad-lib) que têm alguma letra,
+ * agrupados por janela de tempo idêntica (dueto vira uma única linha),
+ * ordenados por startTime. `colors` acumula as cores de TODOS os membros
+ * do evento, sem duplicatas — 1 cor = sólida, 2+ = gradiente no foco.
+ */
+function lyricEvents(project: Project): LyricEvent[] {
+  const map = new Map<
+    string,
+    { start: number; end: number; hangul: string[]; rom: string[]; transl: string[]; colors: string[] }
+  >()
+  for (const s of project.segments) {
+    if (s.isAdlib) continue
+    const hangul = s.lyricHangul?.trim()
     // Legado: `lyric` antigo é tratado como romanização
-    romanized: uniq(active.map((s) => s.lyricRomanized || s.lyric)).join(' / '),
-    translation: uniq(active.map((s) => s.lyricTranslation)).join(' / '),
+    const rom = (s.lyricRomanized || s.lyric)?.trim()
+    const transl = s.lyricTranslation?.trim()
+    if (!hangul && !rom && !transl) continue
+    const key = `${s.startTime}|${s.endTime}`
+    let e = map.get(key)
+    if (!e) {
+      e = { start: s.startTime, end: s.endTime, hangul: [], rom: [], transl: [], colors: [] }
+      map.set(key, e)
+    }
+    if (hangul && !e.hangul.includes(hangul)) e.hangul.push(hangul)
+    if (rom && !e.rom.includes(rom)) e.rom.push(rom)
+    if (transl && !e.transl.includes(transl)) e.transl.push(transl)
+    const color = project.members.find((m) => m.id === s.memberId)?.color
+    if (color && !e.colors.includes(color)) e.colors.push(color)
   }
+  return [...map.values()]
+    .map((e) => ({
+      startTime: e.start,
+      endTime: e.end,
+      layers: {
+        hangul: e.hangul.join(' / '),
+        romanized: e.rom.join(' / '),
+        translation: e.transl.join(' / '),
+      },
+      colors: e.colors.length > 0 ? e.colors : ['#ec4899'],
+    }))
+    .sort((a, b) => a.startTime - b.startTime)
+}
+
+/**
+ * Índice-alvo (contínuo) do scroll de letras no instante t:
+ * - Evento ativo → seu índice exato (foco total).
+ * - Silêncio entre eventos → meio-caminho (ni - 0.5): a letra anterior sobe
+ *   parcialmente e a próxima já vem subindo de baixo, aguardando.
+ * - Depois da última letra → ela desliza para a posição de "passado".
+ */
+function lyricTargetIndex(events: LyricEvent[], t: number): number {
+  const index = events.findIndex((e) => t >= e.startTime && t < e.endTime)
+  if (index >= 0) return index
+  const ni = events.findIndex((e) => e.startTime > t)
+  if (ni >= 0) return ni - 0.5
+  return events.length - 0.5
 }
 
 /**
@@ -787,25 +941,25 @@ function drawVoiceBubble(
   const a = Math.min(1, Math.max(...singers.map((m) => states.get(m.id)!.glow)))
   const scale = (0.86 + 0.14 * a) * fmtScale
 
-  const layers = activeLyricLayers(project, t)
-  const hasLyric = !!(layers.hangul || layers.romanized || layers.translation)
-
   const headerEndY = headerLayout(project).headerEndY
+  const { H } = videoDims(project.format)
   // Eixo Y TRAVADO de forma absoluta: a bolha fica sempre no mesmo lugar,
   // com ou sem letra, com 1 ou vários cantores. Só a largura cresce
   // horizontalmente (centralizada), então nada é empurrado para cima/baixo.
-  // 16:9: centro geométrico entre o fim do header e o topo das barras —
-  // elimina o buraco vazio no meio da tela widescreen.
-  const bubbleCy = horizontal ? (headerEndY + barsTopY) / 2 : headerEndY + 92
+  // 16:9: centro horizontal absoluto (W/2) flutuando em ~47% da altura, no
+  // espaço vazio logo acima das barras (com folga mínima garantida).
+  const bubbleCy = horizontal
+    ? Math.min(H * 0.47, barsTopY - (136 * 1.25) / 2 - 24)
+    : headerEndY + 92
 
   // Geometria: avatares sobrepostos + nomes
   const r = 52
   const overlap = r * 0.75 // deslocamento entre avatares empilhados
   const avatarsW = r * 2 + (singers.length - 1) * overlap
   const names = singers.map((m) => m.name).join(' + ')
-  ctx.font = '700 40px Outfit, sans-serif'
+  ctx.font = `700 40px ${FONT_BODY}`
   const namesRawW = Math.min(ctx.measureText(names).width, 520)
-  ctx.font = '700 22px Outfit, sans-serif'
+  ctx.font = `700 22px ${FONT_BODY}`
   const labelW = ctx.measureText('CANTANDO AGORA').width
   // A área de texto precisa caber o MAIOR dos dois textos (nome curto ex: "V"
   // não pode deixar o rótulo "CANTANDO AGORA" vazar para fora da bolha)
@@ -854,8 +1008,7 @@ function drawVoiceBubble(
     ctx.shadowColor = m.color
     ctx.shadowBlur = 18 * a
     ctx.fillStyle = m.color
-    ctx.beginPath()
-    ctx.arc(cx, 0, r + 5, 0, Math.PI * 2)
+    traceAvatarPath(ctx, cx, 0, r + 5)
     ctx.fill()
     ctx.shadowBlur = 0
 
@@ -867,19 +1020,14 @@ function drawVoiceBubble(
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   ctx.fillStyle = 'rgba(255,255,255,0.55)'
-  ctx.font = '700 22px Outfit, sans-serif'
+  ctx.font = `700 22px ${FONT_BODY}`
   ctx.fillText('CANTANDO AGORA', textX, -30)
   ctx.fillStyle = '#ffffff'
-  ctx.font = '700 40px Outfit, sans-serif'
+  ctx.font = `700 40px ${FONT_BODY}`
   ctx.fillText(names, textX, 14, textAreaW)
   ctx.textBaseline = 'alphabetic'
   ctx.restore()
 
-  // --- Letras sincronizadas em camadas (estilo K-pop edit) ---
-  // O offset considera a escala do formato (a bolha é maior no 16:9)
-  if (hasLyric) {
-    drawLyricLayers(ctx, layers, mainColor, bubbleCy + (cardH * fmtScale) / 2 + 26, barsTopY, a, W)
-  }
 }
 
 interface LyricLayers {
@@ -889,66 +1037,196 @@ interface LyricLayers {
 }
 
 /**
- * Letras em até 3 camadas: Hangul (grande), romanização (média) e tradução
- * (menor, itálica). Cada linha tem contorno escuro + glow na cor do membro.
+ * Scrolling Lyrics com Smooth Scroll Vertical (LERP, estilo Spotify/Apple
+ * Music): a cada frame o smoothActiveIndex persegue o activeIndex real
+ * (`smooth += (target - smooth) * 0.1`), e TODAS as letras vizinhas são
+ * posicionadas pela distância contínua `j - smooth`:
+ *   drawY  = baseY + distance * lyricSpacing  (deslizam juntas para cima)
+ *   alpha  = max(0, 1 - |distance| * 0.7)     (foco 1.0 → vizinhas ~0.3 → 0)
+ *   escala = 0.68 + 0.32 * focus              (cresce ao chegar no foco)
+ * 16:9: alinhado pela DIREITA. 9:16: centralizado entre o selo 'Cantando
+ * Agora' e as barras. Cada bloco tem seu próprio save/restore — a opacidade
+ * nunca vaza para o resto do canvas.
  */
-function drawLyricLayers(
+function drawScrollingLyrics(
   ctx: CanvasRenderingContext2D,
-  layers: LyricLayers,
-  color: string,
-  topY: number,
-  maxY: number,
-  alpha: number,
+  project: Project,
+  t: number,
+  barsTopY: number,
   W: number,
+  states: Map<string, MemberRenderState>,
 ): void {
-  const maxW = W - 160
-  // [texto, fonte, altura de linha, alpha]
+  const events = lyricEvents(project)
+  if (events.length === 0) return
+
+  // --- Interpolação do índice (LERP por frame) ---
+  const target = lyricTargetIndex(events, t)
+  let smooth = smoothLyricIndexes.get(states)
+  if (!smooth) {
+    smooth = { value: target } // primeira renderização: já nasce no alvo
+    smoothLyricIndexes.set(states, smooth)
+  }
+  // Seek/pulo grande na timeline: snap para não atravessar a tela voando
+  if (Math.abs(target - smooth.value) > 2.5) smooth.value = target
+  else smooth.value += (target - smooth.value) * LYRIC_LERP_FACTOR
+
+  const horizontal = project.format === 'horizontal'
+
+  // --- Layout Anchors: 'Posição das Letras' da aba Design ---
+  // 'auto' = padrão do formato (16:9 direita, 9:16 centro). No 16:9 com
+  // 'center' as letras assumem o centro do palco (as infos já vivem no
+  // topo/terço esquerdo); 'left' espelha o bloco para o lado esquerdo,
+  // descendo abaixo do header para não colidir com título/capa.
+  const pos = DESIGN.lyricPosition === 'auto' ? (horizontal ? 'right' : 'center') : DESIGN.lyricPosition
+  const align: CanvasTextAlign = pos === 'left' ? 'left' : pos === 'right' ? 'right' : 'center'
+  const anchorX = pos === 'left' ? 80 : pos === 'right' ? W - 80 : W / 2
+  const maxW = horizontal ? W * 0.42 : W - 160
+
+  // baseY (centro do foco) e espaçamento vertical entre blocos.
+  // 9:16: zona livre entre a base da bolha 'Cantando Agora' e as barras.
+  const bubbleBottom = headerLayout(project).headerEndY + 92 + 68 + 12
+  const baseY = horizontal
+    ? pos === 'center'
+      ? Math.min(barsTopY - 150, 420) // centro-inferior do espaço livre
+      : pos === 'left'
+        ? headerLayout(project).headerEndY + 160 // abaixo do bloco de infos
+        : 310
+    : (bubbleBottom + barsTopY) / 2
+  const lyricSpacing =
+    (horizontal ? 185 : Math.max(110, Math.min(165, (barsTopY - bubbleBottom) / 2 - 14))) *
+    Math.max(0.85, DESIGN.lyricScale)
+
+  // --- Renderização dinâmica: vizinhos de activeIndex-1 a activeIndex+2 ---
+  const center = Math.round(smooth.value)
+  for (let j = center - 1; j <= center + 2; j++) {
+    if (j < 0 || j >= events.length) continue
+    const distance = j - smooth.value
+    // Opacidade contínua pela distância: 0 → 1.0 | ±1 → 0.3 | >±1.4 → some
+    const alpha = Math.max(0, 1 - Math.abs(distance) * 0.7)
+    if (alpha < 0.02) continue
+    const drawY = baseY + distance * lyricSpacing
+    // Foco (0..1): controla escala e glow — vizinhas menores e sem brilho
+    const focus = Math.max(0, 1 - Math.abs(distance))
+    const scale = 0.68 + 0.32 * focus
+    drawLyricBlock(ctx, events[j], anchorX, drawY, align, maxW, alpha, horizontal, scale, focus)
+  }
+}
+
+/**
+ * Bloco de letra: até 3 camadas (Hangul, romanização, tradução), centrado
+ * verticalmente em cy, com contorno escuro + glow na cor do membro (glow
+ * proporcional ao foco). `scale` encolhe o bloco inteiro ao redor da âncora
+ * via transform — as vizinhas ficam menores e crescem ao entrar no foco.
+ */
+function drawLyricBlock(
+  ctx: CanvasRenderingContext2D,
+  e: LyricEvent,
+  x: number,
+  cy: number,
+  align: CanvasTextAlign,
+  maxW: number,
+  alpha: number,
+  horizontal: boolean,
+  scale: number,
+  focus: number,
+): void {
+  const L = e.layers
+  // Slider 'Tamanho das Letras' (80%..150%) multiplica fonte E altura de linha
+  const fs = Math.max(0.8, Math.min(1.5, DESIGN.lyricScale))
+  const sz = (base: number) => Math.round(base * fs)
+  // [texto, fonte, altura de linha, alpha relativo]
   const rows: Array<[string, string, number, number]> = []
-  if (layers.hangul)
-    rows.push([layers.hangul, `800 48px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`, 60, 1])
-  if (layers.romanized) rows.push([layers.romanized, '800 42px Outfit, sans-serif', 54, 1])
-  if (layers.translation) rows.push([layers.translation, 'italic 500 30px Outfit, sans-serif', 42, 0.75])
+  if (L.hangul)
+    rows.push([
+      L.hangul,
+      `800 ${sz(horizontal ? 56 : 48)}px ${FONT_KR}`,
+      sz(horizontal ? 70 : 60),
+      1,
+    ])
+  if (L.romanized)
+    rows.push([L.romanized, `800 ${sz(horizontal ? 48 : 42)}px ${FONT_BODY}`, sz(horizontal ? 62 : 54), 1])
+  if (L.translation)
+    rows.push([
+      L.translation,
+      `italic 500 ${sz(horizontal ? 34 : 30)}px ${FONT_BODY}`,
+      sz(horizontal ? 46 : 42),
+      0.75,
+    ])
   if (rows.length === 0) return
 
   ctx.save()
-  ctx.textAlign = 'center'
+  // Escala ao redor da âncora (x, cy): vizinhas encolhem, o foco cresce.
+  // Todo o desenho abaixo acontece em coordenadas locais pós-transform.
+  ctx.translate(x, cy)
+  ctx.scale(scale, scale)
+  ctx.textAlign = align
   ctx.textBaseline = 'middle'
 
-  // Calcula altura total (com quebra em até 2 linhas por camada)
+  // Altura total (com quebra em até 2 linhas por camada) para centralizar
   const wrapped: Array<{ lines: string[]; font: string; lineH: number; a: number }> = []
   let totalH = 0
+  let maxLineW = 0
   for (const [text, font, lineH, a] of rows) {
     ctx.font = font
     const lines = wrapText(ctx, text, maxW, 2)
+    for (const line of lines) maxLineW = Math.max(maxLineW, ctx.measureText(line).width)
     wrapped.push({ lines, font, lineH, a })
     totalH += lines.length * lineH
   }
 
-  let y = topY + 30
-  // Garante que o bloco não invade as barras
-  if (y + totalH > maxY - 8) y = Math.max(topY - 20, maxY - 8 - totalH)
+  // --- Cores Dinâmicas: exclusivas da letra EM FOCO (focus > 0.5) ---
+  // Passado/futuro (subindo/descendo) permanecem SEMPRE brancos, apenas
+  // com a opacidade reduzida. Em coordenadas locais a âncora é x=0:
+  //   center → texto vai de -maxLineW/2 a +maxLineW/2
+  //   right  → texto vai de -maxLineW a 0
+  const inFocus = focus > 0.5
+  let focusFill: string | CanvasGradient = '#ffffff'
+  if (inFocus) {
+    const colors = e.colors
+    if (colors.length === 1) {
+      focusFill = colors[0] // cor sólida do membro
+    } else {
+      // Cobertura do gradiente conforme a âncora do texto em coordenadas
+      // locais: right → [-W..0], left → [0..W], center → [-W/2..+W/2]
+      const halfW = Math.max(1, maxLineW) / 2
+      const gradient =
+        align === 'right'
+          ? ctx.createLinearGradient(-halfW * 2, 0, 0, 0)
+          : align === 'left'
+            ? ctx.createLinearGradient(0, 0, halfW * 2, 0)
+            : ctx.createLinearGradient(-halfW, 0, halfW, 0)
+      // Divisão igual do espaço entre as cores: 2 → 0/1; 3 → 0/0.5/1...
+      colors.forEach((c, i) => gradient.addColorStop(i / (colors.length - 1), c))
+      focusFill = gradient
+    }
+  }
 
+  let y = -totalH / 2
   for (const row of wrapped) {
     ctx.font = row.font
     for (const line of row.lines) {
-      const cy = y + row.lineH / 2
+      const lineCy = y + row.lineH / 2
       ctx.globalAlpha = alpha * row.a
-      // Glow na cor do membro
-      ctx.shadowColor = color
-      ctx.shadowBlur = 26 * alpha
+      // Glow na cor do membro — proporcional ao foco (vizinhas sem brilho)
+      if (focus > 0.05) {
+        ctx.shadowColor = e.colors[0]
+        ctx.shadowBlur = 26 * focus
+      }
       // Contorno escuro para legibilidade
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
       ctx.lineWidth = 8
       ctx.lineJoin = 'round'
-      ctx.strokeText(line, W / 2, cy, maxW)
+      ctx.strokeText(line, 0, lineCy, maxW)
       ctx.shadowBlur = 0
-      ctx.fillStyle = '#ffffff'
-      ctx.fillText(line, W / 2, cy, maxW)
+      ctx.fillStyle = focusFill
+      ctx.fillText(line, 0, lineCy, maxW)
       y += row.lineH
     }
   }
 
+  // restore devolve fillStyle/transform/alpha ao estado anterior ao bloco
   ctx.restore()
+  ctx.globalAlpha = 1
 }
 
 /** Quebra texto por palavras em até maxLines linhas. */
@@ -1010,12 +1288,12 @@ function drawFinalRanking(
   ctx.shadowBlur = 28 * fade
   ctx.fillStyle = '#ffffff'
   const titleFont = project.format === 'horizontal' ? 56 : 64
-  ctx.font = `800 ${titleFont}px Unbounded, Outfit, sans-serif`
+  ctx.font = `800 ${titleFont}px ${FONT_DISPLAY}`
   const titleY = project.format === 'horizontal' ? 110 : 260
   ctx.fillText('RESULTADO FINAL', W / 2, titleY, W - 120)
   ctx.shadowBlur = 0
   ctx.globalAlpha = fade * 0.55
-  ctx.font = '600 30px Outfit, sans-serif'
+  ctx.font = `600 30px ${FONT_BODY}`
   ctx.fillText(project.title || '', W / 2, titleY + 56, W - 160)
 
   // Linhas do placar em cascata
@@ -1066,7 +1344,7 @@ function drawFinalRanking(
     ctx.fill()
     ctx.shadowBlur = 0
     ctx.fillStyle = isTop3 ? '#1a1408' : '#ffffff'
-    ctx.font = '800 30px Outfit, sans-serif'
+    ctx.font = `800 30px ${FONT_BODY}`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(String(i + 1), medalCx, cy + 1)
@@ -1075,8 +1353,7 @@ function drawFinalRanking(
     // Avatar com anel colorido
     const avCx = medalCx + 28 + 22 + r
     ctx.fillStyle = m.color
-    ctx.beginPath()
-    ctx.arc(avCx, cy, r + 4, 0, Math.PI * 2)
+    traceAvatarPath(ctx, avCx, cy, r + 4)
     ctx.fill()
     drawAvatar(ctx, avatars.get(m.id), m.name, avCx, cy, r)
 
@@ -1085,16 +1362,16 @@ function drawFinalRanking(
     const secs = totals.get(m.id) ?? 0
     const pct = (secs / totalAll) * 100
     ctx.fillStyle = '#ffffff'
-    ctx.font = '700 36px Outfit, sans-serif'
+    ctx.font = `700 36px ${FONT_BODY}`
     ctx.fillText(m.name, textX, cy - 14, rowW - (textX - x0) - 200)
     ctx.fillStyle = 'rgba(255,255,255,0.6)'
-    ctx.font = '500 27px Outfit, sans-serif'
+    ctx.font = `500 27px ${FONT_BODY}`
     ctx.fillText(`${secs.toFixed(1)}s cantados`, textX, cy + 26)
 
     // Porcentagem à direita
     ctx.textAlign = 'right'
     ctx.fillStyle = m.color
-    ctx.font = '800 44px Outfit, sans-serif'
+    ctx.font = `800 44px ${FONT_BODY}`
     ctx.fillText(`${pct.toFixed(1)}%`, x0 + slide + rowW - 34, cy + 6)
     ctx.textAlign = 'left'
 
