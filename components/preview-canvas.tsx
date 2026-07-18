@@ -198,8 +198,17 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         } else if (phaseRef.current === 'main') {
           // O currentTime do áudio é a única fonte de verdade — zero drift
           vt = t.introDur + (audio?.currentTime ?? 0)
-          if (vt >= t.introDur + t.mainDur - 0.02) {
-            // MAIN terminou (áudio acabou ou silêncio final cortado):
+          // MAIN → RANKING SOMENTE quando:
+          //   1) currentTime passou do fim absoluto + respiro (mainDur já
+          //      garante nunca ser menor que o último endTime — silêncio no
+          //      MEIO da música jamais dispara esta transição), OU
+          //   2) o áudio acabou completamente (ended/currentTime no fim) —
+          //      escape para quando currentTime congela antes de mainDur
+          const audioEnded =
+            !!audio &&
+            audio.duration > 0 &&
+            (audio.ended || audio.currentTime >= audio.duration - 0.02)
+          if (vt >= t.introDur + t.mainDur - 0.02 || audioEnded) {
             // entra a fase RANKING de 5s com relógio próprio
             phaseRef.current = 'ranking'
             phaseStartRef.current = performance.now()

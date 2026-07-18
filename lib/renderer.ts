@@ -102,8 +102,8 @@ export const DEFAULT_OUTRO_TEXT = 'Thanks for watching!'
 /** Estados da máquina de renderização do vídeo. */
 export type VideoState = 'INTRO' | 'MAIN' | 'RANKING' | 'OUTRO'
 
-/** Silêncio máximo tolerado após a última linha antes de cortar o MAIN. */
-export const MAX_TRAILING_SILENCE_SECS = 4
+/** Respiro após a ÚLTIMA linha cantada antes de cortar o MAIN (segundos). */
+export const MAX_TRAILING_SILENCE_SECS = 3
 
 export interface VideoTiming {
   introDur: number // 0 ou INTRO_SECS
@@ -124,11 +124,25 @@ export interface VideoTiming {
 export function videoTiming(project: Project, audioDur: number): VideoTiming {
   const introDur = project.introEnabled ? INTRO_SECS : 0
   const outroDur = project.outroEnabled ? OUTRO_SECS : 0
-  const lastSegmentEnd = project.segments.reduce((acc, s) => Math.max(acc, s.endTime), 0)
+  // Fim ABSOLUTO: o endTime mais alto entre TODOS os segmentos — silêncios
+  // no MEIO da música nunca contam como fim (o estado segue MAIN neles)
+  const absoluteLastSegmentEndTime = project.segments.reduce(
+    (acc, s) => Math.max(acc, s.endTime),
+    0,
+  )
+  // audioDur pode chegar 0/NaN (metadata ainda carregando) ou desatualizado;
+  // nunca deixamos isso colapsar o MAIN abaixo do fim absoluto dos segmentos
+  const safeAudioDur = Number.isFinite(audioDur) && audioDur > 0 ? audioDur : 0
+  // MAIN termina em lastEnd + respiro (ou no fim real do áudio, se antes) —
+  // mas NUNCA antes de absoluteLastSegmentEndTime: enquanto alguém ainda vai
+  // cantar, o estado é obrigatoriamente MAIN
   const mainDur =
-    lastSegmentEnd > 0
-      ? Math.min(audioDur, lastSegmentEnd + MAX_TRAILING_SILENCE_SECS)
-      : audioDur
+    absoluteLastSegmentEndTime > 0
+      ? Math.max(
+          Math.min(safeAudioDur, absoluteLastSegmentEndTime + MAX_TRAILING_SILENCE_SECS),
+          absoluteLastSegmentEndTime,
+        )
+      : safeAudioDur
   const rankingDur = project.members.length > 0 ? FINAL_RANKING_SECS : 0
   return {
     introDur,
