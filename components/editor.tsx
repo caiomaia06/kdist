@@ -11,6 +11,7 @@ import {
   RectangleVertical,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DesignPanel } from '@/components/design-panel'
 import { Logo } from '@/components/logo'
 import { LyricsPanel } from '@/components/lyrics-panel'
 import { MembersPanel } from '@/components/members-panel'
@@ -28,7 +29,7 @@ interface EditorProps {
   onBack: () => void
 }
 
-type Tab = 'info' | 'members' | 'timeline' | 'lyrics'
+type Tab = 'info' | 'members' | 'timeline' | 'lyrics' | 'design'
 
 export function Editor({ initialProject, groups = [], userId, onBack }: EditorProps) {
   const [project, setProject] = useState<Project>(initialProject)
@@ -199,6 +200,7 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
     { id: 'members', label: `Membros (${project.members.length})` },
     { id: 'timeline', label: `Timeline (${project.segments.length})` },
     { id: 'lyrics', label: 'Letras' },
+    { id: 'design', label: 'Design' },
   ]
 
   return (
@@ -492,6 +494,10 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
                 onChange={(segments: Segment[]) => patch({ segments })}
               />
             </div>
+          )}
+
+          {tab === 'design' && (
+            <DesignPanel design={project.design} onChange={(design) => patch({ design })} />
           )}
         </aside>
       </div>

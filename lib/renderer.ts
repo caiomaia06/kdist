@@ -7,10 +7,84 @@ import {
   grayscaleImage,
   hasLeftChat,
 } from './left-chat'
-import type { Project, VideoFormat } from './types'
+import { DEFAULT_DESIGN, type DesignSettings, type Project, type VideoFormat } from './types'
 
 export const VIDEO_W = 1080
 export const VIDEO_H = 1920
+
+// ---------- Motor de Customização (designSettings da aba Design) ----------
+
+/** Configuração efetiva: padrões + overrides do projeto. */
+export function designOf(project: Project): DesignSettings {
+  return { ...DEFAULT_DESIGN, ...project.design }
+}
+
+/** Pilhas de fontes por opção (famílias carregadas no layout ou do sistema). */
+const FONT_STACKS: Record<DesignSettings['font'], { body: string; display: string }> = {
+  default: {
+    body: 'Outfit, sans-serif',
+    display: 'Unbounded, Outfit, sans-serif',
+  },
+  sans: {
+    body: "Inter, 'Segoe UI', system-ui, sans-serif",
+    display: "Inter, 'Segoe UI', system-ui, sans-serif",
+  },
+  serif: {
+    body: "'Playfair Display', Georgia, 'Times New Roman', serif",
+    display: "'Playfair Display', Georgia, 'Times New Roman', serif",
+  },
+  impact: {
+    body: "Impact, 'Arial Black', 'Haettenschweiler', sans-serif",
+    display: "Impact, 'Arial Black', 'Haettenschweiler', sans-serif",
+  },
+  mono: {
+    body: "'Courier New', ui-monospace, monospace",
+    display: "'Courier New', ui-monospace, monospace",
+  },
+}
+
+// Variáveis de tipografia usadas em TODOS os ctx.font do renderer.
+// São atualizadas por applyDesign() no início de cada frame — o mesmo
+// desenho serve preview e export, sempre com o design do projeto atual.
+let FONT_BODY = FONT_STACKS.default.body
+let FONT_DISPLAY = FONT_STACKS.default.display
+let FONT_KR = `Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`
+let DESIGN: DesignSettings = DEFAULT_DESIGN
+
+function applyDesign(project: Project): void {
+  DESIGN = designOf(project)
+  const stack = FONT_STACKS[DESIGN.font] ?? FONT_STACKS.default
+  FONT_BODY = stack.body
+  FONT_DISPLAY = stack.display
+  // Coreano: mantém fallbacks CJK em qualquer fonte escolhida
+  FONT_KR = `${stack.body.split(',')[0]}, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`
+}
+
+/** Multiplicador de espessura das barras: 1→0.5x … 5→1x … 10→1.6x. */
+function barThicknessMul(): number {
+  const t = Math.max(1, Math.min(10, DESIGN.barThickness))
+  return t <= 5 ? 0.5 + (t - 1) * 0.125 : 1 + (t - 5) * 0.12
+}
+
+/**
+ * Traça o caminho da máscara do avatar conforme o formato escolhido:
+ * círculo (arc), quadrado arredondado (roundRect r*0.36) ou afiado (r*0.12).
+ * Usado tanto para o clip da foto quanto para o anel colorido atrás.
+ */
+function traceAvatarPath(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+): void {
+  ctx.beginPath()
+  if (DESIGN.avatarShape === 'circle') {
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  } else {
+    const radius = DESIGN.avatarShape === 'rounded' ? r * 0.36 : r * 0.12
+    ctx.roundRect(cx - r, cy - r, r * 2, r * 2, radius)
+  }
+}
 
 /** Dimensões do vídeo conforme o formato do projeto. */
 export function videoDims(format?: VideoFormat): { W: number; H: number } {
@@ -113,7 +187,8 @@ interface HeaderLayout {
 
 function headerLayout(project: Project): HeaderLayout {
   const horizontal = project.format === 'horizontal'
-  const hasCover = !!project.coverImage
+  // Toggle 'Mostrar Capa do Álbum': desligado = layout sem capa
+  const hasCover = !!project.coverImage && DESIGN.showCover
   if (horizontal) {
     // 16:9: header ~25% maior para ocupar melhor a largura do palco
     return hasCover
@@ -154,6 +229,7 @@ export function buildBackgroundCache(
   project: Project,
   coverImg: HTMLImageElement | null,
 ): HTMLCanvasElement {
+  applyDesign(project) // showCover/headerLayout dependem do design atual
   const { W, H } = videoDims(project.format)
   const canvas = document.createElement('canvas')
   canvas.width = W
@@ -180,10 +256,10 @@ export function buildBackgroundCache(
   ctx.fillStyle = 'rgba(6, 5, 12, 0.72)'
   ctx.fillRect(0, 0, W, H)
 
-  // Capa nítida pequena no topo (se existir)
+  // Capa nítida pequena no topo (se existir e o toggle permitir)
   // 16:9: o bloco de informações vive no terço ESQUERDO (centrado em W*0.18);
   // 9:16 permanece centralizado como sempre foi.
-  if (coverImg) {
+  if (coverImg && DESIGN.showCover) {
     const { coverSize, coverCy } = headerLayout(project)
     const cx = project.format === 'horizontal' ? W * 0.18 : W / 2
     ctx.save()
@@ -266,24 +342,26 @@ function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: numb
   ctx.save()
   ctx.textAlign = 'center'
 
-  // Rótulo com tracking largo (16:9: fonte menor para caber no terço)
-  ctx.globalAlpha = Math.min(1, p * 1.2) * 0.55
-  ctx.fillStyle = '#ffffff'
-  ctx.font = `600 ${horizontal ? 24 : 26}px Unbounded, Outfit, sans-serif`
-  ctx.fillText('L I N E   D I S T R I B U T I O N', cx, hl.labelY + rise * 0.5, maxTitleW)
+  // Rótulo com tracking largo (toggle 'Mostrar texto Line Distribution')
+  if (DESIGN.showLabel) {
+    ctx.globalAlpha = Math.min(1, p * 1.2) * 0.55
+    ctx.fillStyle = '#ffffff'
+    ctx.font = `600 ${horizontal ? 24 : 26}px ${FONT_DISPLAY}`
+    ctx.fillText('L I N E   D I S T R I B U T I O N', cx, hl.labelY + rise * 0.5, maxTitleW)
+  }
 
   // Título em fonte display com glow rosa sutil
   ctx.globalAlpha = p
   ctx.shadowColor = 'rgba(236, 72, 153, 0.55)'
   ctx.shadowBlur = 30 * p
   ctx.fillStyle = '#ffffff'
-  ctx.font = `800 ${horizontal ? 56 : hl.titleFont}px Unbounded, Outfit, sans-serif`
+  ctx.font = `800 ${horizontal ? 56 : hl.titleFont}px ${FONT_DISPLAY}`
   ctx.fillText(project.title || 'Sem título', cx, hl.titleY + rise, maxTitleW)
   ctx.shadowBlur = 0
 
   // Artista (nome do grupo)
   ctx.globalAlpha = p * 0.7
-  ctx.font = `500 ${horizontal ? 40 : 38}px Outfit, sans-serif`
+  ctx.font = `500 ${horizontal ? 40 : 38}px ${FONT_BODY}`
   ctx.fillText(project.artist || '', cx, hl.artistY + rise, maxArtistW)
 
   ctx.restore()
@@ -307,6 +385,7 @@ export function drawVideoFrame(
   audioDur: number,
   freq?: Uint8Array,
 ): void {
+  applyDesign(project) // tipografia/estilos da aba Design valem para o frame inteiro
   const { W, H } = videoDims(project.format)
   const state = videoStateAt(project, vt, audioDur)
   const { introDur, mainDur, rankingDur } = videoTiming(project, audioDur)
@@ -364,14 +443,14 @@ function drawIntroScreen(
   // Nome do grupo (fonte menor, tracking largo)
   ctx.globalAlpha = a * 0.7
   ctx.fillStyle = '#ffffff'
-  ctx.font = `600 ${horizontal ? 34 : 40}px Outfit, sans-serif`
+  ctx.font = `600 ${horizontal ? 34 : 40}px ${FONT_BODY}`
   ctx.fillText((project.artist || '').toUpperCase(), W / 2, cy - (horizontal ? 64 : 80) + rise, W - 160)
 
   // Título da música (fonte maior, negrito, glow rosa)
   ctx.globalAlpha = a
   ctx.shadowColor = 'rgba(236, 72, 153, 0.55)'
   ctx.shadowBlur = 34 * a
-  ctx.font = `800 ${horizontal ? 72 : 84}px Unbounded, Outfit, sans-serif`
+  ctx.font = `800 ${horizontal ? 72 : 84}px ${FONT_DISPLAY}`
   ctx.fillText(project.title || 'Sem título', W / 2, cy + (horizontal ? 16 : 20) + rise, W - 140)
   ctx.shadowBlur = 0
 
@@ -419,13 +498,13 @@ function drawOutroScreen(
   ctx.shadowColor = 'rgba(236, 72, 153, 0.5)'
   ctx.shadowBlur = 28 * a
   const horizontal = project.format === 'horizontal'
-  ctx.font = `800 ${horizontal ? 56 : 64}px Unbounded, Outfit, sans-serif`
+  ctx.font = `800 ${horizontal ? 56 : 64}px ${FONT_DISPLAY}`
   ctx.fillText(project.outroText?.trim() || DEFAULT_OUTRO_TEXT, W / 2, H / 2 + rise, W - 160)
   ctx.shadowBlur = 0
 
   // Crédito sutil com o nome da música
   ctx.globalAlpha = a * 0.45
-  ctx.font = '500 30px Outfit, sans-serif'
+  ctx.font = `500 30px ${FONT_BODY}`
   ctx.fillText(
     [project.artist, project.title].filter(Boolean).join(' — '),
     W / 2,
@@ -502,10 +581,13 @@ export function drawFrame(
   const r = Math.max(horizontal ? 24 : 38, Math.min(62, rowH * 0.32)) // raio do avatar
   const avatarCx = 90 + r
   const barX = avatarCx + r + 28
-  // 16:9: barras ~20% mais grossas (18→22 mín, fração 0.24→0.28)
-  const barH = horizontal
+  // 16:9: barras ~20% mais grossas (18→22 mín, fração 0.24→0.28).
+  // O slider 'Espessura das Barras' (1..10) multiplica a altura base
+  // (0.5x fina → 1x média → 1.6x grossa), com teto para não invadir a linha.
+  const baseBarH = horizontal
     ? Math.max(22, Math.min(46, rowH * 0.28))
     : Math.max(26, Math.min(40, rowH * 0.24))
+  const barH = Math.max(10, Math.min(rowH * 0.5, baseBarH * barThicknessMul()))
   const maxBarW = W - barX - 200
   const nameFont = horizontal ? 30 : 34
   const timeFont = horizontal ? 27 : 30
@@ -563,8 +645,7 @@ export function drawFrame(
       ctx.shadowBlur = 24 * glow
     }
     ctx.fillStyle = ringColor
-    ctx.beginPath()
-    ctx.arc(avatarCx, cy, r + 5, 0, Math.PI * 2)
+    traceAvatarPath(ctx, avatarCx, cy, r + 5)
     ctx.fill()
     ctx.shadowBlur = 0 // reset imediato para não vazar o brilho
 
@@ -590,7 +671,7 @@ export function drawFrame(
 
     // --- Nome ---
     ctx.fillStyle = '#ffffff'
-    ctx.font = `600 ${nameFont}px Outfit, sans-serif`
+    ctx.font = `600 ${nameFont}px ${FONT_BODY}`
     ctx.fillText(m.name, barX + 4, cy - barH / 2 - 12, maxBarW)
 
     // --- Barra pílula (recebe o neon) ---
@@ -605,10 +686,12 @@ export function drawFrame(
     ctx.fill()
     ctx.shadowBlur = 0 // reset imediato
 
-    // --- Tempo cantado ---
-    ctx.fillStyle = 'rgba(255,255,255,0.9)'
-    ctx.font = `600 ${timeFont}px Outfit, sans-serif`
-    ctx.fillText(`${(sung.get(m.id) ?? 0).toFixed(1)}s`, barX + w + 18, cy + barH / 2)
+    // --- Tempo cantado (toggle 'Mostrar tempo em números') ---
+    if (DESIGN.showTimes) {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'
+      ctx.font = `600 ${timeFont}px ${FONT_BODY}`
+      ctx.fillText(`${(sung.get(m.id) ?? 0).toFixed(1)}s`, barX + w + 18, cy + barH / 2)
+    }
 
     ctx.globalAlpha = 1
   }
@@ -648,9 +731,9 @@ function drawAdlibBubble(
   const overlap = r * 0.75
   const avatarsW = r * 2 + (singers.length - 1) * overlap
   const names = singers.map((m) => m.name).join(' + ')
-  ctx.font = '700 24px Outfit, sans-serif'
+  ctx.font = `700 24px ${FONT_BODY}`
   const namesW = Math.min(ctx.measureText(names).width, 300)
-  ctx.font = '700 15px Outfit, sans-serif'
+  ctx.font = `700 15px ${FONT_BODY}`
   const labelW = ctx.measureText('AD-LIB ♪').width
   const textAreaW = Math.max(namesW, labelW)
   const padX = 22
@@ -692,8 +775,7 @@ function drawAdlibBubble(
     const m = singers[i]
     const acx = x0 + padX + r + i * overlap
     ctx.fillStyle = m.color
-    ctx.beginPath()
-    ctx.arc(acx, 0, r + 3, 0, Math.PI * 2)
+    traceAvatarPath(ctx, acx, 0, r + 3)
     ctx.fill()
     drawAvatar(ctx, avatars.get(m.id), m.name, acx, 0, r)
   }
@@ -703,10 +785,10 @@ function drawAdlibBubble(
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   ctx.fillStyle = mainColor
-  ctx.font = '700 15px Outfit, sans-serif'
+  ctx.font = `700 15px ${FONT_BODY}`
   ctx.fillText('AD-LIB ♪', textX, -20)
   ctx.fillStyle = 'rgba(255,255,255,0.92)'
-  ctx.font = '700 24px Outfit, sans-serif'
+  ctx.font = `700 24px ${FONT_BODY}`
   ctx.fillText(names, textX, 10, textAreaW)
   ctx.textBaseline = 'alphabetic'
   ctx.restore()
@@ -722,8 +804,8 @@ function drawAvatar(
   r: number,
 ): void {
   ctx.save()
-  ctx.beginPath()
-  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  // Máscara conforme o 'Formato do Avatar' da aba Design
+  traceAvatarPath(ctx, cx, cy, r)
   ctx.clip()
   if (img) {
     ctx.drawImage(img, cx - r, cy - r, r * 2, r * 2)
@@ -731,7 +813,7 @@ function drawAvatar(
     ctx.fillStyle = '#1d1928'
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2)
     ctx.fillStyle = '#ffffff'
-    ctx.font = `700 ${Math.round(r * 0.9)}px Outfit, sans-serif`
+    ctx.font = `700 ${Math.round(r * 0.9)}px ${FONT_BODY}`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText((name[0] || '?').toUpperCase(), cx, cy + 2)
@@ -750,8 +832,7 @@ function drawAvatarSource(
   r: number,
 ): void {
   ctx.save()
-  ctx.beginPath()
-  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  traceAvatarPath(ctx, cx, cy, r)
   ctx.clip()
   ctx.drawImage(source, cx - r, cy - r, r * 2, r * 2)
   ctx.restore()
@@ -876,9 +957,9 @@ function drawVoiceBubble(
   const overlap = r * 0.75 // deslocamento entre avatares empilhados
   const avatarsW = r * 2 + (singers.length - 1) * overlap
   const names = singers.map((m) => m.name).join(' + ')
-  ctx.font = '700 40px Outfit, sans-serif'
+  ctx.font = `700 40px ${FONT_BODY}`
   const namesRawW = Math.min(ctx.measureText(names).width, 520)
-  ctx.font = '700 22px Outfit, sans-serif'
+  ctx.font = `700 22px ${FONT_BODY}`
   const labelW = ctx.measureText('CANTANDO AGORA').width
   // A área de texto precisa caber o MAIOR dos dois textos (nome curto ex: "V"
   // não pode deixar o rótulo "CANTANDO AGORA" vazar para fora da bolha)
@@ -927,8 +1008,7 @@ function drawVoiceBubble(
     ctx.shadowColor = m.color
     ctx.shadowBlur = 18 * a
     ctx.fillStyle = m.color
-    ctx.beginPath()
-    ctx.arc(cx, 0, r + 5, 0, Math.PI * 2)
+    traceAvatarPath(ctx, cx, 0, r + 5)
     ctx.fill()
     ctx.shadowBlur = 0
 
@@ -940,10 +1020,10 @@ function drawVoiceBubble(
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   ctx.fillStyle = 'rgba(255,255,255,0.55)'
-  ctx.font = '700 22px Outfit, sans-serif'
+  ctx.font = `700 22px ${FONT_BODY}`
   ctx.fillText('CANTANDO AGORA', textX, -30)
   ctx.fillStyle = '#ffffff'
-  ctx.font = '700 40px Outfit, sans-serif'
+  ctx.font = `700 40px ${FONT_BODY}`
   ctx.fillText(names, textX, 14, textAreaW)
   ctx.textBaseline = 'alphabetic'
   ctx.restore()
@@ -991,17 +1071,30 @@ function drawScrollingLyrics(
   else smooth.value += (target - smooth.value) * LYRIC_LERP_FACTOR
 
   const horizontal = project.format === 'horizontal'
-  const anchorX = horizontal ? W - 80 : W / 2
-  const align: CanvasTextAlign = horizontal ? 'right' : 'center'
+
+  // --- Layout Anchors: 'Posição das Letras' da aba Design ---
+  // 'auto' = padrão do formato (16:9 direita, 9:16 centro). No 16:9 com
+  // 'center' as letras assumem o centro do palco (as infos já vivem no
+  // topo/terço esquerdo); 'left' espelha o bloco para o lado esquerdo,
+  // descendo abaixo do header para não colidir com título/capa.
+  const pos = DESIGN.lyricPosition === 'auto' ? (horizontal ? 'right' : 'center') : DESIGN.lyricPosition
+  const align: CanvasTextAlign = pos === 'left' ? 'left' : pos === 'right' ? 'right' : 'center'
+  const anchorX = pos === 'left' ? 80 : pos === 'right' ? W - 80 : W / 2
   const maxW = horizontal ? W * 0.42 : W - 160
 
   // baseY (centro do foco) e espaçamento vertical entre blocos.
   // 9:16: zona livre entre a base da bolha 'Cantando Agora' e as barras.
   const bubbleBottom = headerLayout(project).headerEndY + 92 + 68 + 12
-  const baseY = horizontal ? 310 : (bubbleBottom + barsTopY) / 2
-  const lyricSpacing = horizontal
-    ? 185
-    : Math.max(110, Math.min(165, (barsTopY - bubbleBottom) / 2 - 14))
+  const baseY = horizontal
+    ? pos === 'center'
+      ? Math.min(barsTopY - 150, 420) // centro-inferior do espaço livre
+      : pos === 'left'
+        ? headerLayout(project).headerEndY + 160 // abaixo do bloco de infos
+        : 310
+    : (bubbleBottom + barsTopY) / 2
+  const lyricSpacing =
+    (horizontal ? 185 : Math.max(110, Math.min(165, (barsTopY - bubbleBottom) / 2 - 14))) *
+    Math.max(0.85, DESIGN.lyricScale)
 
   // --- Renderização dinâmica: vizinhos de activeIndex-1 a activeIndex+2 ---
   const center = Math.round(smooth.value)
@@ -1038,22 +1131,25 @@ function drawLyricBlock(
   focus: number,
 ): void {
   const L = e.layers
+  // Slider 'Tamanho das Letras' (80%..150%) multiplica fonte E altura de linha
+  const fs = Math.max(0.8, Math.min(1.5, DESIGN.lyricScale))
+  const sz = (base: number) => Math.round(base * fs)
   // [texto, fonte, altura de linha, alpha relativo]
   const rows: Array<[string, string, number, number]> = []
   if (L.hangul)
     rows.push([
       L.hangul,
-      `800 ${horizontal ? 56 : 48}px Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`,
-      horizontal ? 70 : 60,
+      `800 ${sz(horizontal ? 56 : 48)}px ${FONT_KR}`,
+      sz(horizontal ? 70 : 60),
       1,
     ])
   if (L.romanized)
-    rows.push([L.romanized, `800 ${horizontal ? 48 : 42}px Outfit, sans-serif`, horizontal ? 62 : 54, 1])
+    rows.push([L.romanized, `800 ${sz(horizontal ? 48 : 42)}px ${FONT_BODY}`, sz(horizontal ? 62 : 54), 1])
   if (L.translation)
     rows.push([
       L.translation,
-      `italic 500 ${horizontal ? 34 : 30}px Outfit, sans-serif`,
-      horizontal ? 46 : 42,
+      `italic 500 ${sz(horizontal ? 34 : 30)}px ${FONT_BODY}`,
+      sz(horizontal ? 46 : 42),
       0.75,
     ])
   if (rows.length === 0) return
@@ -1090,11 +1186,15 @@ function drawLyricBlock(
     if (colors.length === 1) {
       focusFill = colors[0] // cor sólida do membro
     } else {
+      // Cobertura do gradiente conforme a âncora do texto em coordenadas
+      // locais: right → [-W..0], left → [0..W], center → [-W/2..+W/2]
       const halfW = Math.max(1, maxLineW) / 2
       const gradient =
         align === 'right'
           ? ctx.createLinearGradient(-halfW * 2, 0, 0, 0)
-          : ctx.createLinearGradient(-halfW, 0, halfW, 0)
+          : align === 'left'
+            ? ctx.createLinearGradient(0, 0, halfW * 2, 0)
+            : ctx.createLinearGradient(-halfW, 0, halfW, 0)
       // Divisão igual do espaço entre as cores: 2 → 0/1; 3 → 0/0.5/1...
       colors.forEach((c, i) => gradient.addColorStop(i / (colors.length - 1), c))
       focusFill = gradient
@@ -1188,12 +1288,12 @@ function drawFinalRanking(
   ctx.shadowBlur = 28 * fade
   ctx.fillStyle = '#ffffff'
   const titleFont = project.format === 'horizontal' ? 56 : 64
-  ctx.font = `800 ${titleFont}px Unbounded, Outfit, sans-serif`
+  ctx.font = `800 ${titleFont}px ${FONT_DISPLAY}`
   const titleY = project.format === 'horizontal' ? 110 : 260
   ctx.fillText('RESULTADO FINAL', W / 2, titleY, W - 120)
   ctx.shadowBlur = 0
   ctx.globalAlpha = fade * 0.55
-  ctx.font = '600 30px Outfit, sans-serif'
+  ctx.font = `600 30px ${FONT_BODY}`
   ctx.fillText(project.title || '', W / 2, titleY + 56, W - 160)
 
   // Linhas do placar em cascata
@@ -1244,7 +1344,7 @@ function drawFinalRanking(
     ctx.fill()
     ctx.shadowBlur = 0
     ctx.fillStyle = isTop3 ? '#1a1408' : '#ffffff'
-    ctx.font = '800 30px Outfit, sans-serif'
+    ctx.font = `800 30px ${FONT_BODY}`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(String(i + 1), medalCx, cy + 1)
@@ -1253,8 +1353,7 @@ function drawFinalRanking(
     // Avatar com anel colorido
     const avCx = medalCx + 28 + 22 + r
     ctx.fillStyle = m.color
-    ctx.beginPath()
-    ctx.arc(avCx, cy, r + 4, 0, Math.PI * 2)
+    traceAvatarPath(ctx, avCx, cy, r + 4)
     ctx.fill()
     drawAvatar(ctx, avatars.get(m.id), m.name, avCx, cy, r)
 
@@ -1263,16 +1362,16 @@ function drawFinalRanking(
     const secs = totals.get(m.id) ?? 0
     const pct = (secs / totalAll) * 100
     ctx.fillStyle = '#ffffff'
-    ctx.font = '700 36px Outfit, sans-serif'
+    ctx.font = `700 36px ${FONT_BODY}`
     ctx.fillText(m.name, textX, cy - 14, rowW - (textX - x0) - 200)
     ctx.fillStyle = 'rgba(255,255,255,0.6)'
-    ctx.font = '500 27px Outfit, sans-serif'
+    ctx.font = `500 27px ${FONT_BODY}`
     ctx.fillText(`${secs.toFixed(1)}s cantados`, textX, cy + 26)
 
     // Porcentagem à direita
     ctx.textAlign = 'right'
     ctx.fillStyle = m.color
-    ctx.font = '800 44px Outfit, sans-serif'
+    ctx.font = `800 44px ${FONT_BODY}`
     ctx.fillText(`${pct.toFixed(1)}%`, x0 + slide + rowW - 34, cy + 6)
     ctx.textAlign = 'left'
 

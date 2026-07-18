@@ -19,6 +19,39 @@ export interface Segment {
 
 export type VideoFormat = 'vertical' | 'horizontal'
 
+// ---------- Motor de Customização (aba Design) ----------
+
+/** Fonte global do vídeo (aplicada em todos os textos do canvas). */
+export type VideoFont = 'default' | 'sans' | 'serif' | 'impact' | 'mono'
+
+/** Formato da máscara dos avatares dos membros. */
+export type AvatarShape = 'circle' | 'rounded' | 'square'
+
+/** Âncora horizontal do bloco de letras (16:9 principalmente). */
+export type LyricPosition = 'left' | 'center' | 'right'
+
+export interface DesignSettings {
+  font: VideoFont
+  lyricScale: number // multiplicador do tamanho das letras: 0.8 a 1.5
+  avatarShape: AvatarShape
+  barThickness: number // espessura das barras: 1 (fina) a 10 (grossa); 5 = padrão
+  lyricPosition: LyricPosition | 'auto' // 'auto' = padrão do formato
+  showCover: boolean // capa do álbum (pequena, no header)
+  showLabel: boolean // texto 'LINE DISTRIBUTION'
+  showTimes: boolean // tempos numéricos ao lado das barras
+}
+
+export const DEFAULT_DESIGN: DesignSettings = {
+  font: 'default',
+  lyricScale: 1,
+  avatarShape: 'circle',
+  barThickness: 5,
+  lyricPosition: 'auto',
+  showCover: true,
+  showLabel: true,
+  showTimes: true,
+}
+
 export interface Group {
   id: string
   name: string
@@ -41,6 +74,7 @@ export interface Project {
   introEnabled?: boolean // tela cinematográfica de entrada (3s antes do áudio)
   outroEnabled?: boolean // tela cinematográfica de saída (3s após o ranking)
   outroText?: string // texto de encerramento (padrão: 'Thanks for watching!')
+  design?: Partial<DesignSettings> // customização visual (aba Design)
   createdAt: number
   updatedAt: number
 }
