@@ -14,13 +14,23 @@ interface TimelinePanelProps {
   segments: Segment[]
   onChange: (segments: Segment[]) => void
   getTime: () => number
+  /** Segmento selecionado (hotkey Delete no editor apaga este). */
+  selectedSegmentId?: string | null
+  onSelectSegment?: (id: string | null) => void
 }
 
 function fmt(s: number): string {
   return s.toFixed(1)
 }
 
-export function TimelinePanel({ members, segments, onChange, getTime }: TimelinePanelProps) {
+export function TimelinePanel({
+  members,
+  segments,
+  onChange,
+  getTime,
+  selectedSegmentId,
+  onSelectSegment,
+}: TimelinePanelProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
@@ -193,6 +203,9 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
         }`}
         role="status"
         aria-live="polite"
+        // O editor lê este atributo para NÃO disparar Play/Pause com Espaço
+        // enquanto a Timeline está em modo de gravação por tecla
+        data-space-recording={selectedIds.length > 0 ? 'true' : undefined}
       >
         <Keyboard className="size-4 shrink-0" />
         {spaceHeld ? (
@@ -255,7 +268,18 @@ export function TimelinePanel({ members, segments, onChange, getTime }: Timeline
           return (
             <li
               key={s.id}
-              className="flex flex-col gap-1.5 rounded-md border border-border bg-card px-2 py-2.5 text-sm transition-all duration-200 ease-in-out animate-in fade-in slide-in-from-top-1 hover:border-primary/40 hover:bg-secondary/60 md:py-1.5"
+              onClick={(e) => {
+                // Cliques em inputs/botões internos não alternam a seleção
+                const t = e.target as HTMLElement
+                if (t.closest('input, button')) return
+                onSelectSegment?.(selectedSegmentId === s.id ? null : s.id)
+              }}
+              aria-selected={selectedSegmentId === s.id}
+              className={`flex cursor-pointer flex-col gap-1.5 rounded-md border px-2 py-2.5 text-sm transition-all duration-200 ease-in-out animate-in fade-in slide-in-from-top-1 md:py-1.5 ${
+                selectedSegmentId === s.id
+                  ? 'border-primary bg-primary/10 ring-1 ring-primary/50'
+                  : 'border-border bg-card hover:border-primary/40 hover:bg-secondary/60'
+              }`}
             >
               {/* Mobile: controles com rolagem horizontal própria (touch-pan-x)
                   para não empurrar a página; hitboxes ≥44px para o dedo */}

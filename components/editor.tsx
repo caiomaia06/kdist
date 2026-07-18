@@ -1,7 +1,15 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ImageIcon, Music, RectangleHorizontal, RectangleVertical } from 'lucide-react'
+import {
+  ArrowLeft,
+  FolderDown,
+  FolderUp,
+  ImageIcon,
+  Music,
+  RectangleHorizontal,
+  RectangleVertical,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Logo } from '@/components/logo'
 import { LyricsPanel } from '@/components/lyrics-panel'
@@ -27,9 +35,12 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [uploadingAudio, setUploadingAudio] = useState(false)
   const [tab, setTab] = useState<Tab>('info')
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null)
   const previewRef = useRef<PreviewHandle>(null)
   const coverInputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
+  const backupInputRef = useRef<HTMLInputElement>(null)
 
   // Carrega o áudio do Supabase Storage (URL assinada) ao abrir
   useEffect(() => {
@@ -43,20 +54,117 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
     }
   }, [initialProject.id, initialProject.hasAudio, userId])
 
-  // Auto-save com debounce na nuvem
+  // Auto-save com debounce na nuvem + indicador visual (saving → saved)
   const isFirstRender = useRef(true)
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false
       return
     }
+    setSaveState('saving')
     const timer = setTimeout(() => {
-      void upsertProjectCloud({ ...project, updatedAt: Date.now() }, userId).catch((e) =>
-        console.error('Falha ao salvar projeto na nuvem', e),
-      )
+      void upsertProjectCloud({ ...project, updatedAt: Date.now() }, userId)
+        .then(() => {
+          setSaveState('saved')
+          // Volta ao repouso depois do pulso de confirmação
+          setTimeout(() => setSaveState('idle'), 2000)
+        })
+        .catch((e) => {
+          console.error('Falha ao salvar projeto na nuvem', e)
+          setSaveState('idle')
+        })
     }, 800)
     return () => clearTimeout(timer)
   }, [project, userId])
+
+  // ---------- Backup local: Salvar / Carregar projeto (.json) ----------
+  const saveBackup = () => {
+    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const safeName = (project.title || 'projeto').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    a.download = `line-distribution-${safeName}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const loadBackup = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text) as Partial<Project>
+      // Validação mínima da estrutura antes de substituir o estado
+      if (!data || !Array.isArray(data.members) || !Array.isArray(data.segments)) {
+        throw new Error('Arquivo de backup inválido')
+      }
+      // Preserva id/hasAudio atuais: o backup restaura o CONTEÚDO editável,
+      // mas o projeto aberto e seu áudio na nuvem continuam os mesmos.
+      setProject((prev) => ({
+        ...prev,
+        ...data,
+        id: prev.id,
+        hasAudio: prev.hasAudio,
+        audioName: prev.audioName,
+        updatedAt: Date.now(),
+      }))
+      setSelectedSegmentId(null)
+    } catch (e) {
+      console.error('Falha ao carregar backup', e)
+      alert('Arquivo de backup inválido. Selecione um .json exportado por este app.')
+    } finally {
+      // Permite recarregar o mesmo arquivo em sequência
+      if (backupInputRef.current) backupInputRef.current.value = ''
+    }
+  }
+
+  // ---------- Hotkeys globais: Espaço (play/pause) e Delete (segmento) ----------
+  const selectedSegmentIdRef = useRef(selectedSegmentId)
+  selectedSegmentIdRef.current = selectedSegmentId
+  const projectStateRef = useRef(project)
+  projectStateRef.current = project
+
+  useEffect(() => {
+    const isTyping = (el: EventTarget | null) => {
+      const t = el as HTMLElement | null
+      return (
+        !!t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.tagName === 'SELECT' ||
+          t.isContentEditable)
+      )
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isTyping(e.target)) return
+
+      // Espaço = Play/Pause — mas NÃO quando a Timeline está em modo de
+      // gravação por tecla (membros selecionados: Espaço grava segmento)
+      if (e.code === 'Space' && !e.repeat) {
+        const recordingMode = document.querySelector('[data-space-recording="true"]')
+        if (!recordingMode) {
+          e.preventDefault()
+          previewRef.current?.togglePlay()
+        }
+        return
+      }
+
+      // Delete/Backspace = apaga o segmento selecionado na Timeline
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedSegmentIdRef.current) {
+        e.preventDefault()
+        const id = selectedSegmentIdRef.current
+        setProject((prev) => ({
+          ...prev,
+          segments: prev.segments.filter((s) => s.id !== id),
+        }))
+        setSelectedSegmentId(null)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const patch = (p: Partial<Project>) => setProject((prev) => ({ ...prev, ...p }))
 
@@ -102,10 +210,53 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
         <Logo className="size-8 shrink-0" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-semibold">{project.title || 'Sem título'}</h1>
-          <p className="truncate text-xs text-muted-foreground">
-            {project.artist || 'Artista'} · salvo automaticamente
+          <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+            <span
+              className={`size-2 shrink-0 rounded-full transition-colors duration-300 ${
+                saveState === 'saving'
+                  ? 'animate-pulse bg-amber-500'
+                  : saveState === 'saved'
+                    ? 'animate-pulse bg-emerald-500'
+                    : 'bg-emerald-500/50'
+              }`}
+              aria-hidden="true"
+            />
+            <span className="truncate" role="status" aria-live="polite">
+              {saveState === 'saving'
+                ? 'Salvando…'
+                : saveState === 'saved'
+                  ? 'Salvo localmente'
+                  : `${project.artist || 'Artista'} · salvo automaticamente`}
+            </span>
           </p>
         </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={saveBackup}
+          title="Baixa um arquivo .json com todo o projeto (backup local)"
+          aria-label="Salvar projeto em arquivo"
+        >
+          <FolderDown className="size-4" />
+          <span className="hidden md:inline-block">Salvar Projeto</span>
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => backupInputRef.current?.click()}
+          title="Restaura um backup .json exportado por este app"
+          aria-label="Carregar projeto de arquivo"
+        >
+          <FolderUp className="size-4" />
+          <span className="hidden md:inline-block">Carregar Projeto</span>
+        </Button>
+        <input
+          ref={backupInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => void loadBackup(e.target.files?.[0])}
+        />
         <ThemeSwitcher />
       </header>
 
@@ -327,6 +478,8 @@ export function Editor({ initialProject, groups = [], userId, onBack }: EditorPr
                 segments={project.segments}
                 onChange={(segments: Segment[]) => patch({ segments })}
                 getTime={() => previewRef.current?.getTime() ?? 0}
+                selectedSegmentId={selectedSegmentId}
+                onSelectSegment={setSelectedSegmentId}
               />
             </div>
           )}

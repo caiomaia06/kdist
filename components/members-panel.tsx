@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Plus, Trash2, Upload, Users } from 'lucide-react'
+import { ChevronDown, ChevronUp, Plus, Trash2, Upload, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { compressImage } from '@/lib/image-utils'
 import { MEMBER_COLORS, uid, type Group, type Member } from '@/lib/types'
@@ -42,6 +42,15 @@ export function MembersPanel({ members, groups = [], onChange }: MembersPanelPro
 
   const removeMember = (id: string) => {
     onChange(members.filter((m) => m.id !== id))
+  }
+
+  // Troca o membro com o vizinho (dir = -1 sobe, +1 desce)
+  const moveMember = (index: number, dir: -1 | 1) => {
+    const target = index + dir
+    if (target < 0 || target >= members.length) return
+    const next = [...members]
+    ;[next[index], next[target]] = [next[target], next[index]]
+    onChange(next)
   }
 
   const handleAvatar = async (id: string, file: File | undefined) => {
@@ -109,11 +118,32 @@ export function MembersPanel({ members, groups = [], onChange }: MembersPanelPro
       )}
 
       <ul className="flex flex-col gap-2">
-        {members.map((m) => (
+        {members.map((m, i) => (
           <li
             key={m.id}
-            className="flex items-center gap-3 rounded-lg border border-border bg-card p-2 transition-all duration-200 ease-in-out animate-in fade-in slide-in-from-top-1 hover:border-primary/40"
+            className="flex items-center gap-2 rounded-lg border border-border bg-card p-2 transition-all duration-200 ease-in-out animate-in fade-in slide-in-from-top-1 hover:border-primary/40"
           >
+            {/* Reordenação: sobe/desce na lista (ordem das barras no vídeo) */}
+            <div className="flex shrink-0 flex-col">
+              <button
+                type="button"
+                onClick={() => moveMember(i, -1)}
+                disabled={i === 0}
+                className="flex h-5 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                aria-label={`Mover ${m.name} para cima`}
+              >
+                <ChevronUp className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveMember(i, 1)}
+                disabled={i === members.length - 1}
+                className="flex h-5 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                aria-label={`Mover ${m.name} para baixo`}
+              >
+                <ChevronDown className="size-3.5" />
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => fileRefs.current.get(m.id)?.click()}

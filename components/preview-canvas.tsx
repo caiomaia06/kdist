@@ -30,6 +30,8 @@ import type { Project } from '@/lib/types'
 
 export interface PreviewHandle {
   getTime: () => number
+  /** Alterna Play/Pause — usado pelo atalho global de teclado (Espaço). */
+  togglePlay: () => void
 }
 
 interface PreviewCanvasProps {
@@ -83,6 +85,9 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
 
     useImperativeHandle(ref, () => ({
       getTime: () => audioRef.current?.currentTime ?? 0,
+      togglePlay: () => {
+        if (!exporting) togglePlay()
+      },
     }))
 
     // Renderiza no tempo de VÍDEO vt (intro/outro inclusos na linha do tempo)
@@ -426,7 +431,7 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
             onChange={(e) => seek(Number(e.target.value))}
             disabled={!canPlay || exporting}
             className="min-w-0 flex-1 accent-primary"
-            aria-label="Posição do vídeo"
+            aria-label="Posição do v��deo"
           />
           <span className="w-10 font-mono text-xs text-muted-foreground md:w-12">
             {formatTime(timing.totalDur)}
