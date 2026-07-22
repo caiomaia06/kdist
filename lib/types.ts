@@ -52,37 +52,6 @@ export const DEFAULT_DESIGN: DesignSettings = {
   showTimes: true,
 }
 
-// ---------- Vídeo Complementar (PiP / Background no Canvas) ----------
-
-/**
- * Modo de exibição do vídeo complementar:
- * - 'background': fundo completo com blur + escurecimento
- * - 'pip': janela pequena no canto (Picture-in-Picture)
- * - 'lyrics': substitui a área das letras
- * - 'left': terço esquerdo da tela (APENAS 16:9, split screen)
- */
-export type VideoOverlayMode = 'background' | 'pip' | 'lyrics' | 'left'
-
-export interface VideoOverlaySettings {
-  enabled: boolean
-  mode: VideoOverlayMode
-  blur: number // desfoque em px (modo background): 0 a 20
-  darken: number // escurecimento 0 a 0.8 (modo background)
-  borderWidth: number // espessura da moldura em px (modos com janela): 0 a 12
-  borderColor: string // cor da moldura
-  cornerRadius: number // arredondamento dos cantos em px: 0 a 48
-}
-
-export const DEFAULT_VIDEO_OVERLAY: VideoOverlaySettings = {
-  enabled: false,
-  mode: 'pip',
-  blur: 8,
-  darken: 0.55,
-  borderWidth: 4,
-  borderColor: '#ffffff',
-  cornerRadius: 24,
-}
-
 export interface Group {
   id: string
   name: string
@@ -106,8 +75,6 @@ export interface Project {
   outroEnabled?: boolean // tela cinematográfica de saída (3s após o ranking)
   outroText?: string // texto de encerramento (padrão: 'Thanks for watching!')
   design?: Partial<DesignSettings> // customização visual (aba Design)
-  video?: Partial<VideoOverlaySettings> // vídeo complementar (PiP/background)
-  videoName?: string // nome do arquivo de vídeo (guardado no IndexedDB local)
   createdAt: number
   updatedAt: number
 }
