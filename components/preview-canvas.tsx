@@ -37,6 +37,8 @@ export interface PreviewHandle {
 interface PreviewCanvasProps {
   project: Project
   audioUrl: string | null
+  /** URL (blob) do vídeo complementar — renderizado no canvas (PiP/fundo). */
+  videoUrl?: string | null
 }
 
 function formatTime(s: number): string {
@@ -46,9 +48,11 @@ function formatTime(s: number): string {
 }
 
 export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
-  function PreviewCanvas({ project, audioUrl }, ref) {
+  function PreviewCanvas({ project, audioUrl, videoUrl }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const audioRef = useRef<HTMLAudioElement>(null)
+    // <video> invisível na memória: fonte de frames para o canvas (sempre mudo)
+    const videoRef = useRef<HTMLVideoElement>(null)
     const cacheRef = useRef<HTMLCanvasElement | null>(null)
     const avatarsRef = useRef<Map<string, HTMLImageElement>>(new Map())
     const statesRef = useRef<Map<string, MemberRenderState>>(new Map())
@@ -110,7 +114,22 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         analyserRef.current && playingRef.current && phaseRef.current === 'main'
           ? readFrequency(analyserRef.current)
           : undefined,
+        videoRef.current,
       )
+    }, [])
+
+    /**
+     * Sincroniza o <video> complementar com o áudio principal:
+     * play/pause atrelados + correção de currentTime quando o drift passa
+     * de 0.35s (vídeos mais curtos que a música entram em loop via módulo).
+     */
+    const syncVideo = useCallback((audioTime: number, shouldPlay: boolean) => {
+      const v = videoRef.current
+      if (!v || !v.duration || !Number.isFinite(v.duration)) return
+      const target = audioTime % v.duration
+      if (Math.abs(v.currentTime - target) > 0.35) v.currentTime = target
+      if (shouldPlay && v.paused) void v.play().catch(() => {})
+      if (!shouldPlay && !v.paused) v.pause()
     }, [])
 
     /**
@@ -245,6 +264,9 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
           }
         }
 
+        // Vídeo complementar: acompanha o áudio principal (só roda no MAIN)
+        syncVideo(audio?.currentTime ?? 0, phaseRef.current === 'main')
+
         videoTimeRef.current = vt
         renderAt(vt)
         const now = performance.now()
@@ -255,14 +277,18 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
         rafRef.current = requestAnimationFrame(loop)
       }
       rafRef.current = requestAnimationFrame(loop)
-      return () => cancelAnimationFrame(rafRef.current)
-    }, [playing, exporting, renderAt])
+      return () => {
+        cancelAnimationFrame(rafRef.current)
+        videoRef.current?.pause()
+      }
+    }, [playing, exporting, renderAt, syncVideo])
 
     const togglePlay = () => {
       const audio = audioRef.current
       if (!audio || !audioUrl) return
       if (playing) {
         audio.pause()
+        videoRef.current?.pause()
         playingRef.current = false
         setPlaying(false)
       } else {
@@ -285,6 +311,8 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
       const audio = audioRef.current
       if (!audio) return
       syncToVideoTime(vt, playingRef.current)
+      // Reposiciona o vídeo complementar junto (mesmo pausado, para o frame certo)
+      syncVideo(audio.currentTime, playingRef.current && phaseRef.current === 'main')
       setTime(vt)
       statesRef.current.clear()
       renderAt(vt)
@@ -417,6 +445,21 @@ export const PreviewCanvas = forwardRef<PreviewHandle, PreviewCanvasProps>(
           }}
           crossOrigin="anonymous"
         />
+
+        {/* Vídeo complementar: fonte de frames para o canvas — nunca visível,
+            SEMPRE mudo (o áudio principal continua sendo a música) */}
+        {videoUrl && (
+          <video
+            ref={videoRef}
+            src={videoUrl}
+            muted
+            playsInline
+            preload="auto"
+            className="hidden"
+            aria-hidden="true"
+            onLoadedData={() => renderAt(videoTimeRef.current)}
+          />
+        )}
 
         <div className="flex w-full max-w-xl items-center gap-2 md:gap-3">
           <Button

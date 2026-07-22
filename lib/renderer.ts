@@ -7,7 +7,14 @@ import {
   grayscaleImage,
   hasLeftChat,
 } from './left-chat'
-import { DEFAULT_DESIGN, type DesignSettings, type Project, type VideoFormat } from './types'
+import {
+  DEFAULT_DESIGN,
+  DEFAULT_VIDEO_OVERLAY,
+  type DesignSettings,
+  type Project,
+  type VideoFormat,
+  type VideoOverlaySettings,
+} from './types'
 
 export const VIDEO_W = 1080
 export const VIDEO_H = 1920
@@ -50,14 +57,40 @@ let FONT_BODY = FONT_STACKS.default.body
 let FONT_DISPLAY = FONT_STACKS.default.display
 let FONT_KR = `Outfit, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`
 let DESIGN: DesignSettings = DEFAULT_DESIGN
+let VIDEO_CFG: VideoOverlaySettings = DEFAULT_VIDEO_OVERLAY
+
+/** Configuração efetiva do vídeo complementar: padrões + overrides. */
+export function videoOverlayOf(project: Project): VideoOverlaySettings {
+  return { ...DEFAULT_VIDEO_OVERLAY, ...project.video }
+}
 
 function applyDesign(project: Project): void {
   DESIGN = designOf(project)
+  VIDEO_CFG = videoOverlayOf(project)
   const stack = FONT_STACKS[DESIGN.font] ?? FONT_STACKS.default
   FONT_BODY = stack.body
   FONT_DISPLAY = stack.display
   // Coreano: mantém fallbacks CJK em qualquer fonte escolhida
   FONT_KR = `${stack.body.split(',')[0]}, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`
+}
+
+/**
+ * Split Screen (modo 'left', apenas 16:9): largura reservada ao vídeo no
+ * terço esquerdo. Zero em qualquer outro modo/formato — o layout do resto
+ * do frame (header, barras) desloca-se por este inset.
+ */
+function leftVideoInset(project: Project): number {
+  if (project.format !== 'horizontal') return 0
+  if (!VIDEO_CFG.enabled || VIDEO_CFG.mode !== 'left') return 0
+  return Math.round(videoDims('horizontal').W * 0.33)
+}
+
+/** Centro X do bloco de informações do header, ciente do split screen. */
+function headerCenterX(project: Project, W: number): number {
+  if (project.format !== 'horizontal') return W / 2
+  const inset = leftVideoInset(project)
+  // Split screen: informações centralizadas ACIMA das barras (área restante)
+  return inset > 0 ? inset + (W - inset) / 2 : W * 0.18
 }
 
 /** Multiplicador de espessura das barras: 1→0.5x … 5→1x … 10→1.6x. */
@@ -275,7 +308,7 @@ export function buildBackgroundCache(
   // 9:16 permanece centralizado como sempre foi.
   if (coverImg && DESIGN.showCover) {
     const { coverSize, coverCy } = headerLayout(project)
-    const cx = project.format === 'horizontal' ? W * 0.18 : W / 2
+    const cx = headerCenterX(project, W)
     ctx.save()
     ctx.beginPath()
     ctx.roundRect(cx - coverSize / 2, coverCy - coverSize / 2, coverSize, coverSize, 24)
@@ -290,6 +323,154 @@ export function buildBackgroundCache(
   }
 
   return canvas
+}
+
+// ---------- Vídeo Complementar (PiP / Background / Letras / Split) ----------
+
+/** O <video> está pronto para drawImage? (metadata + primeiro frame) */
+function videoReady(v: HTMLVideoElement | null | undefined): v is HTMLVideoElement {
+  return !!v && v.readyState >= 2 && v.videoWidth > 0 && v.videoHeight > 0
+}
+
+/** drawImage em "cover fit" dentro de um retângulo (recorte central). */
+function drawVideoCover(
+  ctx: CanvasRenderingContext2D,
+  v: HTMLVideoElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const scale = Math.max(w / v.videoWidth, h / v.videoHeight)
+  const sw = w / scale
+  const sh = h / scale
+  const sx = (v.videoWidth - sw) / 2
+  const sy = (v.videoHeight - sh) / 2
+  ctx.drawImage(v, sx, sy, sw, sh, x, y, w, h)
+}
+
+/**
+ * Janela de vídeo com masking: ctx.save() → roundRect → clip() → drawImage
+ * (cover fit) → restore → moldura por cima. Cantos arredondados limpos,
+ * sem vazar nada para o resto do canvas.
+ */
+function drawVideoWindow(
+  ctx: CanvasRenderingContext2D,
+  v: HTMLVideoElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const radius = Math.max(0, Math.min(VIDEO_CFG.cornerRadius, Math.min(w, h) / 2))
+  ctx.save()
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, radius)
+  ctx.clip()
+  drawVideoCover(ctx, v, x, y, w, h)
+  ctx.restore()
+  // Moldura desenhada POR CIMA do clip (metade dentro, metade fora)
+  if (VIDEO_CFG.borderWidth > 0) {
+    ctx.strokeStyle = VIDEO_CFG.borderColor
+    ctx.lineWidth = VIDEO_CFG.borderWidth
+    ctx.beginPath()
+    ctx.roundRect(x, y, w, h, radius)
+    ctx.stroke()
+  }
+}
+
+/**
+ * Camada de FUNDO do vídeo complementar (modo 'background'): cobre o canvas
+ * inteiro ANTES de barras/avatares, com desfoque (ctx.filter) e um retângulo
+ * preto semi-transparente por cima para escurecer/contraste.
+ */
+function drawVideoBackground(
+  ctx: CanvasRenderingContext2D,
+  v: HTMLVideoElement,
+  W: number,
+  H: number,
+): void {
+  ctx.save()
+  if (VIDEO_CFG.blur > 0) {
+    ctx.filter = `blur(${VIDEO_CFG.blur}px)`
+    // Overdraw nas bordas: o blur "puxa" transparência das beiradas
+    const pad = VIDEO_CFG.blur * 2
+    drawVideoCover(ctx, v, -pad, -pad, W + pad * 2, H + pad * 2)
+    ctx.filter = 'none'
+  } else {
+    drawVideoCover(ctx, v, 0, 0, W, H)
+  }
+  ctx.restore()
+  // Escurecimento para manter contraste com textos e barras
+  if (VIDEO_CFG.darken > 0) {
+    ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.85, VIDEO_CFG.darken)})`
+    ctx.fillRect(0, 0, W, H)
+  }
+}
+
+/**
+ * Camada de JANELA do vídeo (modos 'pip', 'lyrics' e 'left'), desenhada
+ * por cima do conteúdo. Cada modo tem seu retângulo:
+ * - pip: canto inferior direito, respeitando o aspect ratio ORIGINAL do vídeo
+ * - lyrics: a área onde as letras apareceriam (as letras são suprimidas)
+ * - left: terço esquerdo inteiro, de cima a baixo (APENAS 16:9)
+ */
+function drawVideoOverlayWindow(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  v: HTMLVideoElement,
+  W: number,
+  H: number,
+): void {
+  const horizontal = project.format === 'horizontal'
+
+  if (VIDEO_CFG.mode === 'left') {
+    if (!horizontal) return // split screen só existe no 16:9
+    const inset = leftVideoInset(project)
+    // Terço esquerdo inteiro: masking reto (sem cantos arredondados nas
+    // bordas da tela), com uma linha divisória sutil à direita
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(0, 0, inset, H)
+    ctx.clip()
+    drawVideoCover(ctx, v, 0, 0, inset, H)
+    ctx.restore()
+    if (VIDEO_CFG.borderWidth > 0) {
+      ctx.fillStyle = VIDEO_CFG.borderColor
+      ctx.fillRect(inset - VIDEO_CFG.borderWidth, 0, VIDEO_CFG.borderWidth, H)
+    }
+    return
+  }
+
+  if (VIDEO_CFG.mode === 'pip') {
+    // Aspect ratio ORIGINAL do vídeo enviado (nunca distorce)
+    const aspect = v.videoWidth / v.videoHeight
+    const w = Math.round(horizontal ? W * 0.22 : W * 0.34)
+    const h = Math.round(w / aspect)
+    // Canto inferior direito, acima da zona do visualizador
+    const margin = 40
+    const x = W - margin - w
+    const y = H - (horizontal ? 120 : 140) - h
+    drawVideoWindow(ctx, v, x, y, w, h)
+    return
+  }
+
+  // mode === 'lyrics': substitui o bloco onde as letras apareceriam
+  if (horizontal) {
+    // 16:9: terço direito superior (mesma zona das letras alinhadas à direita)
+    const w = Math.round(W * 0.36)
+    const h = Math.round(w * (9 / 16))
+    drawVideoWindow(ctx, v, W - 80 - w, 140, w, h)
+  } else {
+    // 9:16: zona livre entre a bolha 'Cantando Agora' e as barras
+    const bubbleBottom = headerLayout(project).headerEndY + 92 + 68 + 12
+    const barsTopY = barsTop(project)
+    const zoneH = Math.max(180, barsTopY - bubbleBottom - 24)
+    const w = W - 160
+    const h = Math.min(zoneH, Math.round(w * (9 / 16)))
+    const y = bubbleBottom + (barsTopY - bubbleBottom - h) / 2
+    drawVideoWindow(ctx, v, 80, y, w, h)
+  }
 }
 
 /** Tempo acumulado cantado por cada membro até o instante t. */
@@ -349,7 +530,8 @@ function drawHeaderText(ctx: CanvasRenderingContext2D, project: Project, t: numb
 
   // 16:9: bloco de informações contido no terço ESQUERDO da tela (centrado
   // em W*0.18, alinhado à capa). 9:16: centralizado, como sempre.
-  const cx = horizontal ? W * 0.18 : W / 2
+  // Split screen ('left'): informações movem para CIMA das barras (área restante).
+  const cx = headerCenterX(project, W)
   const maxTitleW = horizontal ? W * 0.34 : W - 120
   const maxArtistW = horizontal ? W * 0.34 : W - 160
 
@@ -398,6 +580,7 @@ export function drawVideoFrame(
   vt: number,
   audioDur: number,
   freq?: Uint8Array,
+  video?: HTMLVideoElement | null,
 ): void {
   applyDesign(project) // tipografia/estilos da aba Design valem para o frame inteiro
   const { W, H } = videoDims(project.format)
@@ -419,7 +602,7 @@ export function drawVideoFrame(
     return
   }
   // MAIN: tempo de áudio = vt - introDur (sincronia intacta)
-  drawFrame(ctx, cache, project, avatars, states, totals, vt - introDur, audioDur, freq)
+  drawFrame(ctx, cache, project, avatars, states, totals, vt - introDur, audioDur, freq, video)
 }
 
 /**
@@ -547,11 +730,19 @@ export function drawFrame(
   t: number,
   duration?: number,
   freq?: Uint8Array,
+  video?: HTMLVideoElement | null,
 ): void {
   const { W, H } = videoDims(project.format)
 
   // Limpa o quadro com o cache offscreen (uma única drawImage)
   ctx.drawImage(cache, 0, 0)
+
+  // Vídeo complementar em modo FUNDO COMPLETO: cobre todo o canvas ANTES
+  // das barras e avatares (blur + escurecimento); a capa parada fica coberta
+  const vidEl = VIDEO_CFG.enabled && videoReady(video) ? video : null
+  if (vidEl && VIDEO_CFG.mode === 'background') {
+    drawVideoBackground(ctx, vidEl, W, H)
+  }
 
   const members = project.members
   const n = members.length
@@ -593,7 +784,9 @@ export function drawFrame(
   const startY = topY + (availH - rowH * n) / 2
 
   const r = Math.max(horizontal ? 24 : 38, Math.min(62, rowH * 0.32)) // raio do avatar
-  const avatarCx = 90 + r
+  // Split screen (modo 'left'): todo o bloco de barras desloca para a direita
+  const inset = leftVideoInset(project)
+  const avatarCx = inset + 90 + r
   const barX = avatarCx + r + 28
   // 16:9: barras ~20% mais grossas (18→22 mín, fração 0.24→0.28).
   // O slider 'Espessura das Barras' (1..10) multiplica a altura base
@@ -714,9 +907,19 @@ export function drawFrame(
   // Scrolling Lyrics: independente da bolha — durante silêncio a próxima
   // letra já fica aguardando na tela. `states` identifica a sessão de
   // renderização para o smoothActiveIndex (LERP) do scroll.
-  drawScrollingLyrics(ctx, project, t, topY, W, states)
+  // Modo 'Área das Letras': o vídeo complementar SUBSTITUI o bloco de
+  // letras (útil quando o vídeo enviado já tem legendas embutidas).
+  if (!(vidEl && VIDEO_CFG.mode === 'lyrics')) {
+    drawScrollingLyrics(ctx, project, t, topY, W, states)
+  }
   drawAdlibBubble(ctx, project, avatars, states, W)
   drawLeftChatToasts(ctx, project, lastEnd, avatars, t, W)
+
+  // Janela do vídeo complementar (PiP / Área das Letras / Lateral Esquerda)
+  // por cima do conteúdo, com clip arredondado + moldura
+  if (vidEl && VIDEO_CFG.mode !== 'background') {
+    drawVideoOverlayWindow(ctx, project, vidEl, W, H)
+  }
 }
 
 /**
